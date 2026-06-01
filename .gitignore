@@ -1,0 +1,18 @@
+# 忽略 Visual Studio 产生的隐藏文件夹和缓存
+.vs
+.user
+.suo
+
+# 忽略所有编译输出的文件夹
+Debug
+Release
+x64
+x86
+
+# 忽略编译产生的临时文件
+.obj
+.pdb
+.idb
+.tlog
+.lastbuildstate
+.log

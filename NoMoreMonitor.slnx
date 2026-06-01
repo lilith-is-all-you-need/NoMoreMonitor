@@ -1,0 +1,8 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="NoMoreMonitor/NoMoreMonitor.vcxproj" Id="dc1ff06b-5f9e-45e0-b914-052183c3166d" />
+  <Project Path="NoMoreMonitor_Dll/NoMoreMonitor_Dll.vcxproj" Id="0d9c015b-7e9d-4d5c-bf76-9431fddd1c79" />
+</Solution>
