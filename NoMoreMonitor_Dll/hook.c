@@ -1,6 +1,7 @@
 ﻿#include <Windows.h>
 #include <stdbool.h>
-#include <stdio.h>  =
+#include <stdio.h>
+#include <stdlib.h>
 #include "MinHook.h"
 #include "messager.h"
 
@@ -49,7 +50,50 @@ void smart_delay(DWORD ms) {
 bool is_init = false;
 
 static volatile LONG g_in_hook = 0;
-static volatile LONG g_in_mf_hook = 0; 
+static volatile LONG g_in_mf_hook = 0;
+
+static int g_min_delay = 3;
+static int g_max_delay = 8;
+
+void hook_load_config_from_shared_memory() {
+	HANDLE mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, L"Local\\LilithSharedMem");
+	if (!mapping) {
+		msg_pass(L"Can't open shared memory for config, using defaults", status_info, 0);
+		return;
+	}
+
+	void* ptr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(struct log_data));
+	if (ptr) {
+		struct log_data* shared = (struct log_data*)ptr;
+		g_min_delay = shared->min_delay_seconds;
+		g_max_delay = shared->max_delay_seconds;
+
+		if (g_min_delay < 1) g_min_delay = 1;
+		if (g_max_delay < g_min_delay) g_max_delay = g_min_delay;
+
+		wchar_t buf[64];
+		swprintf_s(buf, 64, L"Config loaded: delay=%d-%ds", g_min_delay, g_max_delay);
+		msg_pass(buf, status_info, 0);
+
+		UnmapViewOfFile(ptr);
+	}
+	CloseHandle(mapping);
+}
+
+int get_random_delay() {
+	static bool seeded = false;
+	if (!seeded) {
+		srand((unsigned int)(GetTickCount64() ^ GetCurrentThreadId()));
+		seeded = true;
+	}
+
+	if (g_min_delay >= g_max_delay) {
+		return g_min_delay;
+	}
+
+	int range = g_max_delay - g_min_delay + 1;
+	return g_min_delay + (rand() % range);
+} 
 
 void countdown_delay(int seconds) {
 	wchar_t msg_buf[64];
@@ -67,7 +111,8 @@ int __fastcall hooked_ds_capture_start(void* ptr_this, void* edx) {
 	msg_pass(L"DS capture start!", status_start, 0);
 	Sleep(50);
 
-	countdown_delay(5);
+	int random_delay = get_random_delay();
+	countdown_delay(random_delay);
 
 	msg_pass(L"watching", status_watching, 0);
 	int ret = orig_ds_capture_start(ptr_this, edx);
@@ -84,7 +129,8 @@ bool __fastcall hooked_mf_capture_start(void* ptr_this, void* edx) {
 
 	Sleep(50);
 
-	countdown_delay(5);
+	int random_delay = get_random_delay();
+	countdown_delay(random_delay);
 
 	msg_pass(L"watching", status_watching, 0);
 
@@ -139,6 +185,7 @@ bool init_hook() {
 		return false;
 	}
 	is_init = true;
+	hook_load_config_from_shared_memory();
 	return true;
 }
 

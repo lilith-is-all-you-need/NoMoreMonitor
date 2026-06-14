@@ -5,6 +5,7 @@
 #include "messager.h"
 #include "injector.h"
 #include "resource.h"
+#include "config.h"
 #include <tchar.h>
 
 #include <psapi.h>
@@ -96,16 +97,48 @@ int main() {
     SetupLogWindow();
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
     SetConsoleTitleW(L"[Lilith]NoMoreMonitor --dev:YDS inspiration from LHX");
-    int choice = MessageBoxW(NULL, L"是否以巨幅文本+通知的形式来提示（若选否则只以通知形式）", L"Lilith is all you need", MB_YESNO | MB_ICONQUESTION);
-    if (choice == IDYES) {
-        g_use_osd = true;
+
+    // 加载配置文件
+    AppConfig g_config;
+    wchar_t ini_path[MAX_PATH];
+    GetModuleFileNameW(NULL, ini_path, MAX_PATH);
+    wchar_t* last_slash = wcsrchr(ini_path, L'\\');
+    if (last_slash) {
+        wcscpy_s(last_slash + 1, MAX_PATH - (last_slash - ini_path) - 1, L"NoMoreMonitor.ini");
+    }
+
+    bool config_exists = config_load(ini_path, &g_config);
+
+    // 如果配置文件不存在，弹出MessageBox并保存用户选择
+    if (!config_exists) {
+        int choice = MessageBoxW(NULL, L"是否以巨幅文本+通知的形式来提示（若选否则只以通知形式）",
+                                 L"Lilith is all you need", MB_YESNO | MB_ICONQUESTION);
+        g_config.use_osd = (choice == IDYES);
+
+        // 保存配置，下次不再询问
+        config_save(ini_path, &g_config);
+    }
+
+    // 应用配置
+    g_use_osd = g_config.use_osd;
+    if (g_use_osd) {
         wprintf(L"[-]mode: text with notice\n");
     }
     else {
-        g_use_osd = false;
         wprintf(L"[-]mode: notice only\n");
     }
+
     if (!messager_init()) { wprintf(L"[!]messager init failed\n"); goto MAIN_FAILED; }
+
+    // 将延迟配置写入shared memory
+    if (WaitForSingleObject(mutex, 2000) == WAIT_OBJECT_0) {
+        struct log_data* shared = (struct log_data*)ptr_buf;
+        shared->min_delay_seconds = g_config.min_delay;
+        shared->max_delay_seconds = g_config.max_delay;
+        ReleaseMutex(mutex);
+        wprintf(L"[*]Config synced: delay=%d-%ds\n", g_config.min_delay, g_config.max_delay);
+    }
+
     if (!notice_window_init()) { wprintf(L"[!]notice init failed\n"); messager_uninit(); goto MAIN_FAILED; }
     while (1) {
         wprintf(L"[-]Waiting for media_capture.exe...\n");
