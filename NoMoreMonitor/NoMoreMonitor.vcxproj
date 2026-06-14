@@ -144,12 +144,14 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="config.c" />
     <ClCompile Include="injector.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="messager.c" />
     <ClCompile Include="notice.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="config.h" />
     <ClInclude Include="injector.h" />
     <ClInclude Include="messager.h" />
     <ClInclude Include="notice.h" />

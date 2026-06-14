@@ -18,6 +18,8 @@ struct log_data {
 	wchar_t log_buffer[1024];
 	int curr_state;
 	int pot_error;
+	int min_delay_seconds;
+	int max_delay_seconds;
 };
 
 extern HANDLE event;
