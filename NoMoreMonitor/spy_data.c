@@ -44,24 +44,64 @@ void spy_data_file_path(wchar_t* buf, size_t len) {
     swprintf_s(buf, len, L"%s%s", dir, CSV_FILENAME);
 }
 
+/* 默认目录（程序同目录 NoMoreMonitor\）下的 CSV 完整路径 */
+static void spy_data_default_path(wchar_t* buf, size_t len) {
+    if (!buf || len == 0) return;
+    wchar_t dir[MAX_PATH] = { 0 };
+    config_get_data_dir(dir, _countof(dir), NULL);
+    size_t l = wcslen(dir);
+    if (l > 0 && dir[l - 1] != L'\\' && dir[l - 1] != L'/') wcscat_s(dir, _countof(dir), L"\\");
+    swprintf_s(buf, len, L"%s%s", dir, CSV_FILENAME);
+}
+
 /* 确保数据目录存在（自定义目录可能是多级） */
 static bool spy_data_ensure_dir(void) {
     if (g_config.data_dir[0] == L'\0') {
         config_ensure_data_dir(NULL);   /* 创建并隐藏默认文件夹 */
         return true;
     }
-    return SHCreateDirectoryExW(NULL, g_config.data_dir, NULL) == ERROR_SUCCESS ||
-           GetFileAttributesW(g_config.data_dir) != INVALID_FILE_ATTRIBUTES;
+
+    int r = SHCreateDirectoryExW(NULL, g_config.data_dir, NULL);
+    if (r == ERROR_SUCCESS) return true;
+
+    /* SHCreateDirectoryExW 对已存在的目录返回 ERROR_ALREADY_EXISTS(183)，
+       因此再按属性兜底判断一次（并确认它确实是目录） */
+    DWORD attr = GetFileAttributesW(g_config.data_dir);
+    if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        return true;
+    }
+
+    wprintf(L"[!]spy data dir create FAILED: %s (SHCreateDirectoryEx=%d, GetLastError=%lu)\n",
+            g_config.data_dir, r, GetLastError());
+    return false;
+}
+
+/* 向指定 CSV 文件追加一行（文件为空时先写表头）。成功返回 true */
+static bool spy_write_line(const wchar_t* path, const char* line) {
+    HANDLE f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return false;
+
+    LARGE_INTEGER sz;
+    sz.QuadPart = 0;
+    GetFileSizeEx(f, &sz);
+    if (sz.QuadPart == 0) {
+        DWORD hw = 0;
+        WriteFile(f, CSV_HEADER, (DWORD)strlen(CSV_HEADER), &hw, NULL);
+    }
+
+    DWORD written = 0;
+    DWORD len = (DWORD)strlen(line);
+    bool ok = (WriteFile(f, line, len, &written, NULL) && written == len);
+    if (ok) FlushFileBuffers(f);
+    CloseHandle(f);
+    return ok;
 }
 
 bool spy_data_append(const SpySession* s) {
     if (!s) return false;
 
     ensure_cs();
-    if (!spy_data_ensure_dir()) return false;
-
-    wchar_t path[MAX_PATH] = { 0 };
-    spy_data_file_path(path, _countof(path));
 
     char line[128];
     sprintf_s(line, _countof(line),
@@ -75,24 +115,32 @@ bool spy_data_append(const SpySession* s) {
     EnterCriticalSection(&g_spy_cs);
 
     bool ok = false;
-    HANDLE f = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
-                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f != INVALID_HANDLE_VALUE) {
-        LARGE_INTEGER sz;
-        sz.QuadPart = 0;
-        GetFileSizeEx(f, &sz);
-        if (sz.QuadPart == 0) {
-            DWORD hw = 0;
-            WriteFile(f, CSV_HEADER, (DWORD)strlen(CSV_HEADER), &hw, NULL);
-        }
 
-        DWORD written = 0;
-        DWORD len = (DWORD)strlen(line);
-        if (WriteFile(f, line, len, &written, NULL) && written == len) {
-            FlushFileBuffers(f);
-            ok = true;
+    /* 优先写自定义目录 */
+    if (g_config.data_dir[0] != L'\0') {
+        wchar_t path[MAX_PATH] = { 0 };
+        spy_data_file_path(path, _countof(path));
+        if (spy_data_ensure_dir()) {
+            ok = spy_write_line(path, line);
+            if (!ok) {
+                wprintf(L"[!]spy data write to custom dir FAILED (%s, err=%lu), falling back to default dir\n",
+                        g_config.data_dir, GetLastError());
+            }
         }
-        CloseHandle(f);
+        else {
+            wprintf(L"[!]custom spy dir unusable (%s), falling back to default dir\n", g_config.data_dir);
+        }
+    }
+
+    /* 回退到默认目录（自定义未设置或写失败） */
+    if (!ok) {
+        config_ensure_data_dir(NULL);
+        wchar_t def_path[MAX_PATH] = { 0 };
+        spy_data_default_path(def_path, _countof(def_path));
+        ok = spy_write_line(def_path, line);
+        if (!ok) {
+            wprintf(L"[!]spy data write to default dir FAILED (%s, err=%lu)\n", def_path, GetLastError());
+        }
     }
 
     LeaveCriticalSection(&g_spy_cs);
@@ -127,6 +175,12 @@ bool spy_data_load(SpySession** out, int* count) {
 
     HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE && g_config.data_dir[0] != L'\0') {
+        /* 自定义目录里没有数据，回退到默认目录再找一次 */
+        spy_data_default_path(path, _countof(path));
+        f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
     if (f == INVALID_HANDLE_VALUE) return false;
 
     DWORD size = GetFileSize(f, NULL);

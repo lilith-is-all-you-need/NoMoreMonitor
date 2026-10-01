@@ -96,6 +96,7 @@ void config_defaults(AppConfig* c) {
     c->pause_seconds = 5;
     c->show_image = false;
     c->image_replace = false;
+    c->image_scale = 100;
     c->advanced_mode = false;
     c->data_dir[0] = L'\0';
 
@@ -196,6 +197,7 @@ static void apply_key(AppConfig* c, const wchar_t* sec, const wchar_t* key, cons
         if (wcscmp(key, L"pause_seconds") == 0) { c->pause_seconds = _wtoi(val); if (c->pause_seconds < 1) c->pause_seconds = 1; }
         else if (wcscmp(key, L"show_image") == 0) { c->show_image = (wcscmp(val, L"1") == 0 || _wcsicmp(val, L"true") == 0); }
         else if (wcscmp(key, L"image_replace") == 0) { c->image_replace = (wcscmp(val, L"1") == 0 || _wcsicmp(val, L"true") == 0); }
+        else if (wcscmp(key, L"image_scale") == 0) { c->image_scale = _wtoi(val); if (c->image_scale < 10) c->image_scale = 10; if (c->image_scale > 400) c->image_scale = 400; }
         else if (wcscmp(key, L"advanced_mode") == 0) { c->advanced_mode = (wcscmp(val, L"1") == 0 || _wcsicmp(val, L"true") == 0); }
         else if (wcscmp(key, L"data_dir") == 0) set_str_field(c->data_dir, _countof(c->data_dir), val);
     }
@@ -314,6 +316,7 @@ bool config_save(const AppConfig* c, HMODULE mod) {
     buf_append(buf, _countof(buf), &pos, L"pause_seconds=%d\r\n", c->pause_seconds);
     buf_append(buf, _countof(buf), &pos, L"show_image=%d\r\n", c->show_image ? 1 : 0);
     buf_append(buf, _countof(buf), &pos, L"image_replace=%d\r\n", c->image_replace ? 1 : 0);
+    buf_append(buf, _countof(buf), &pos, L"image_scale=%d\r\n", c->image_scale);
     buf_append(buf, _countof(buf), &pos, L"advanced_mode=%d\r\n", c->advanced_mode ? 1 : 0);
     buf_append(buf, _countof(buf), &pos, L"data_dir=%s\r\n", c->data_dir);
     buf_append(buf, _countof(buf), &pos, L"\r\n");
@@ -370,4 +373,33 @@ bool config_save(const AppConfig* c, HMODULE mod) {
     buf_append(buf, _countof(buf), &pos, L"spy_stop=%s\r\n", c->console_spy_stop);
 
     return write_file_utf8(path, buf);
+}
+
+/* ================= 控制台运行态应用 ================= */
+
+void config_apply_console(void) {
+    SetConsoleTitleW(g_config.console_title);
+
+    HWND hc = GetConsoleWindow();
+    if (!g_config.show_console) {
+        if (hc) ShowWindow(hc, SW_HIDE);
+        return;
+    }
+    if (hc) ShowWindow(hc, SW_SHOW);
+
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut == INVALID_HANDLE_VALUE) return;
+
+    int vals[2] = { 0, 7 };   /* 默认黑底、浅灰字 */
+    size_t n = wcslen(g_config.console_color);
+    for (size_t i = 0; i < n && i < 2; i++) {
+        wchar_t ch = g_config.console_color[i];
+        int v = -1;
+        if (ch >= L'0' && ch <= L'9') v = ch - L'0';
+        else if (ch >= L'a' && ch <= L'f') v = ch - L'a' + 10;
+        else if (ch >= L'A' && ch <= L'F') v = ch - L'A' + 10;
+        if (v >= 0) vals[i] = v;
+    }
+    WORD attr = (WORD)((vals[0] << 4) | vals[1]);
+    SetConsoleTextAttribute(hOut, attr);
 }

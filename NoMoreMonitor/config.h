@@ -22,6 +22,7 @@ typedef struct AppConfig {
     int      pause_seconds;      /* 捕获开始前的倒计时秒数 */
     bool     show_image;         /* 是否显示图片 */
     bool     image_replace;      /* true: 图片替代文字; false: 图片叠加在文字下 */
+    int      image_scale;        /* 图片显示缩放百分比，100=适配屏幕 */
     bool     advanced_mode;      /* 配置面板是否打开专业模式 */
     wchar_t  data_dir[MAX_PATH]; /* spy 数据目录，空串=与程序同目录 */
 
@@ -91,6 +92,9 @@ bool config_load(AppConfig* c, HMODULE mod);
 
 /* 将 c 写入配置文件。mod 为 NULL 时使用 EXE 模块。 */
 bool config_save(const AppConfig* c, HMODULE mod);
+
+/* 立即把 g_config 中的控制台设置应用到当前控制台窗口（标题/颜色/显隐） */
+void config_apply_console(void);
 
 /* 颜色 <-> "RRGGBB" 字符串 */
 void color_to_hex(COLORREF color, wchar_t* out, size_t out_len);

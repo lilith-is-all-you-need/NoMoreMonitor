@@ -98,10 +98,17 @@
 * 「专业模式」开关状态不持久：新增 `advanced_mode` 配置项并在保存时落盘。
 * 配置文件中文乱码：改为显式 UTF-8 读写（含 BOM）。
 * 控制台窗口缩放不生效：仅 `SetWindowPos` 缩不动控制台，需先按字体大小设置屏幕缓冲区。
+* 自定义 spy 目录后不再记录：目录创建/文件写入失败改为显式报错（错误码），并修正目录存在性判断（需确为目录）。
+* 自定义 spy 目录时“新建文件夹”权限不足：目录选择改用跨进程的 `IFileOpenDialog`（`FOS_PICKFOLDERS`），“新建文件夹”由 explorer 处理，不再受本进程 UAC/UIPI 隔离影响。
+* 设置保存后控制台颜色/标题/显隐不立即生效：新增 `config_apply_console()`，启动与保存时统一应用。
+* 设置保存无成功/失败提示：保存结果改为弹窗提示，失败时不关闭面板。
+* 统计分析带宽为固定经验值：圆 KDE 带宽改为数据驱动（圆标准差 + Silverman 法则），时长直方图改用 90 分位数上限，小样本更稳健。
 
 ## 📝 待办事项 (TODO)
 
-* **预览 / 浏览图片时触发 WinRT 首次机会异常**：系统文件对话框（`GetOpenFileNameW`/`IFileOpenDialog`）在部分环境会枚举 shell 命名空间，加载第三方 shell 扩展（百度网盘 `YunShellExtV1.dll`）、缩略图缓存、网络提供程序 `p9np.dll`，抛出良性的 `winrt::hresult_error 0x80070490`（first-chance，被系统内部捕获，不影响功能，但调试器会中断）。待评估彻底的规避方案（如纯文件系统选择器）或接受该良性异常。
+* **预览/浏览图片时触发 `winrt::hresult_error` 首次机会异常**：这是第三方 shell 扩展（百度网盘 `YunShellExtV1.dll` 等）在 shell 命名空间枚举时抛出的良性异常（`0x80070490`，被系统内部捕获，不影响 Release 运行），但调试器会中断。规避方式：Visual Studio「调试 → 窗口 → 异常设置」中取消勾选 C++ 异常的 `winrt::hresult_error`，或按 F5 继续；若仍想在代码层彻底规避，需换成纯文件系统选择器（不经过 shell，已评估但暂不采用）。
+* **自定义 spy 数据目录写入被拒（未解决）**：即使以管理员运行（`TokenElevation` 确认已提权），`spy_data_append` 在自定义目录创建 `spy_log.csv` 仍报 `err=5`（拒绝访问），连手动 `mkdir` 可写的 `D:\test` 也会被“可写探测”判为不可写；但非提权 PowerShell 却能 `mkdir`。已排除普通 NTFS ACL（管理员本可绕过）与 `FILE_APPEND_DATA` 无法建文件的可能（实测可建）。高度怀疑是 Windows Defender「受控文件夹访问」或第三方杀软（360/火绒/电脑管家等）的防勒索/文档保护，按“未签名程序”在拦截（不区分是否管理员）。当前规避：自定义目录写失败会自动回退到程序同目录 `NoMoreMonitor\spy_log.csv`。待办：在安全软件中把 `NoMoreMonitor.exe` 加白（或关闭受控文件夹访问）后复测确认根因。
+
 
 ## ⚠️ 免责声明 (Disclaimer)
 

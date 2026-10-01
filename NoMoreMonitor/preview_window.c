@@ -9,6 +9,7 @@
 struct pv_data {
     HBITMAP bmp;
     HDC hdc;
+    HGDIOBJ old_bmp;
 };
 
 static LRESULT CALLBACK pv_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -21,16 +22,18 @@ static LRESULT CALLBACK pv_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_NCDESTROY:
         if (pd) {
-            if (pd->hdc) DeleteDC(pd->hdc);
+            /* 先取消选中的位图再删除 DC，避免 GDI 对象泄漏/句柄耗尽 */
+            if (pd->hdc && pd->old_bmp) SelectObject(pd->hdc, pd->old_bmp);
             if (pd->bmp) DeleteObject(pd->bmp);
+            if (pd->hdc) DeleteDC(pd->hdc);
             free(pd);
         }
-        return 0;
+        return DefWindowProcW(hwnd, msg, wp, lp);
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-bool show_image_preview(const wchar_t* path) {
+bool show_image_preview(const wchar_t* path, int scale_percent) {
     int w = 0, h = 0;
     unsigned char* px = img_load_file(path, &w, &h);
     if (!px || w <= 0 || h <= 0) {
@@ -38,19 +41,22 @@ bool show_image_preview(const wchar_t* path) {
         return false;
     }
 
-    /* 超过屏幕 80% 则等比缩小到能放下 */
+    /* 与 OSD 一致的缩放：适配屏幕基准 × 用户缩放比例（小图放大、大图缩小），预览即实际显示尺寸 */
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
-    int max_w = sw * 80 / 100;
-    int max_h = sh * 80 / 100;
-    if (w > max_w || h > max_h) {
-        double s = ((double)max_w / w) < ((double)max_h / h) ? ((double)max_w / w) : ((double)max_h / h);
-        int nw = (int)(w * s), nh = (int)(h * s);
-        if (nw < 1) nw = 1;
-        if (nh < 1) nh = 1;
-        px = img_scale_rgba(px, &w, &h, nw, nh);
-        if (!px) return false;
+    if (sw <= 0 || sh <= 0) {
+        img_free(px);
+        return false;
     }
+    if (scale_percent < 10) scale_percent = 10;
+    if (scale_percent > 400) scale_percent = 400;
+    double fit = ((double)sw / w) < ((double)sh / h) ? ((double)sw / w) : ((double)sh / h);
+    double s = fit * scale_percent / 100.0;
+    if (s < 1e-6) s = 1e-6;
+    int nw = (int)(w * s), nh = (int)(h * s);
+    if (nw < 1) nw = 1;
+    if (nh < 1) nh = 1;
+    px = img_scale_rgba(px, &w, &h, nw, nh);   /* Catmull-Rom 锐化缩放；失败时保持原尺寸 */
 
     HINSTANCE inst = GetModuleHandleW(NULL);
     WNDCLASSEXW wc = { 0 };
@@ -88,7 +94,11 @@ bool show_image_preview(const wchar_t* path) {
     img_free(px);
 
     HDC hdc = CreateCompatibleDC(NULL);
-    SelectObject(hdc, bmp);
+    if (!hdc) {
+        DeleteObject(bmp);
+        return false;
+    }
+    HGDIOBJ old_bmp = SelectObject(hdc, bmp);
 
     int x = (sw - w) / 2, y = (sh - h) / 2;
     if (x < 0) x = 0;
@@ -98,20 +108,23 @@ bool show_image_preview(const wchar_t* path) {
                                 L"NoMoreMonitor 预览（点击关闭）",
                                 WS_POPUP, x, y, w, h, NULL, NULL, inst, NULL);
     if (!hwnd) {
-        DeleteDC(hdc);
+        SelectObject(hdc, old_bmp);
         DeleteObject(bmp);
+        DeleteDC(hdc);
         return false;
     }
 
     struct pv_data* pd = (struct pv_data*)malloc(sizeof(struct pv_data));
     if (!pd) {
         DestroyWindow(hwnd);
-        DeleteDC(hdc);
+        SelectObject(hdc, old_bmp);
         DeleteObject(bmp);
+        DeleteDC(hdc);
         return false;
     }
     pd->bmp = bmp;
     pd->hdc = hdc;
+    pd->old_bmp = old_bmp;
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)pd);
 
     POINT window_pt = { x, y };

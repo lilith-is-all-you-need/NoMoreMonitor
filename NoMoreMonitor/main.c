@@ -9,6 +9,7 @@
 #include "config.h"
 #include "osd_render.h"
 #include <tchar.h>
+#include <shlobj.h>
 
 #include <psapi.h>
 #pragma comment(lib, "psapi.lib")
@@ -73,25 +74,6 @@ void SetupLogWindow() {
         SWP_SHOWWINDOW);
 }
 
-/* 应用控制台颜色（"背景前景" 十六进制，如 "0E" = 黑底黄字） */
-static void setup_console_color(void) {
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut == INVALID_HANDLE_VALUE) return;
-
-    int vals[2] = { 0, 7 };   /* 默认黑底、浅灰字 */
-    size_t n = wcslen(g_config.console_color);
-    for (size_t i = 0; i < n && i < 2; i++) {
-        wchar_t ch = g_config.console_color[i];
-        int v = -1;
-        if (ch >= L'0' && ch <= L'9') v = ch - L'0';
-        else if (ch >= L'a' && ch <= L'f') v = ch - L'a' + 10;
-        else if (ch >= L'A' && ch <= L'F') v = ch - L'A' + 10;
-        if (v >= 0) vals[i] = v;
-    }
-    WORD attr = (WORD)((vals[0] << 4) | vals[1]);
-    SetConsoleTextAttribute(hOut, attr);
-}
-
 BOOL WINAPI console_ctrl_handler(DWORD signal) {
     switch (signal) {
     case CTRL_C_EVENT:
@@ -131,6 +113,21 @@ DWORD FindProcessByEnum(const TCHAR* processName)
     return 0;
 }
 
+/* 可靠的“是否已提权”判断（TokenElevation，比 IsUserAnAdmin 更准确） */
+static bool process_is_elevated(void) {
+    bool elevated = false;
+    HANDLE token = NULL;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        TOKEN_ELEVATION elev = { 0 };
+        DWORD size = 0;
+        if (GetTokenInformation(token, TokenElevation, &elev, sizeof(elev), &size)) {
+            elevated = (elev.TokenIsElevated != 0);
+        }
+        CloseHandle(token);
+    }
+    return elevated;
+}
+
 int main() {
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
     config_load(&g_config, NULL);
@@ -142,17 +139,14 @@ int main() {
             config_save(&g_config, NULL);
         }
     }
-    SetConsoleTitleW(g_config.console_title);
-
-    /* 控制台：显示/隐藏 + 左上角缩放 + 颜色 */
+    /* 控制台：标题 + 显示/隐藏 + 颜色（集中到 config_apply_console） */
+    config_apply_console();
     if (g_config.show_console) {
         SetupLogWindow();
-        setup_console_color();
     }
-    else {
-        HWND hc = GetConsoleWindow();
-        if (hc) ShowWindow(hc, SW_HIDE);
-    }
+
+    /* 诊断：确认当前进程是否真的以管理员（提权）运行 */
+    wprintf(L"[*]Process elevated (admin): %s\n", process_is_elevated() ? L"YES" : L"NO");
 
     int choice = MessageBoxW(NULL, L"是否以巨幅文本+通知的形式来提示（若选否则只以通知形式）", L"Lilith is all you need", MB_YESNO | MB_ICONQUESTION);
     if (choice == IDYES) {
@@ -184,8 +178,9 @@ int main() {
         wprintf(L"[*]%s\n", g_config.console_target_appeared);
         HANDLE target_process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         if (!target_process) {
-            wprintf(L"[!]OpenProcess failed\n");
-            goto MAIN_FAILED;
+            /* 目标可能刚退出（竞态），重试而不是退出整个监控 */
+            wprintf(L"[!]OpenProcess failed (%lu), retrying...\n", GetLastError());
+            continue;
         }
         WaitForInputIdle(target_process, 5000);
         wchar_t full_path[MAX_PATH] = { 0 };

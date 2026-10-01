@@ -18,6 +18,7 @@ struct AnalysisResult {
     double mean_minutes;              /* 圆均值(参考) */
     double median_sec;                /* 时长中位数(稳健) */
     double mean_sec;
+    double bandwidth_minutes;         /* KDE 数据驱动带宽(分钟) */
     DWORD  min_sec, max_sec;
     int    count;
 };
@@ -32,12 +33,42 @@ static double circ_dist_min(double a, double b) {
     return d;
 }
 
+/* 数据驱动的圆核带宽（分钟）：用圆标准差 + Silverman 经验法则，小样本自动加宽 */
+static double kde_bandwidth_minutes(const std::vector<double>& t) {
+    int n = (int)t.size();
+    if (n <= 1) return 60.0;
+
+    const double TWO_PI = 6.28318530717958647692;
+    double sx = 0.0, sy = 0.0;
+    for (int i = 0; i < n; i++) {
+        double a = t[i] / 1440.0 * TWO_PI;
+        sx += cos(a);
+        sy += sin(a);
+    }
+    double R = sqrt(sx * sx + sy * sy) / n;   /* 平均合向量长度，0~1 */
+
+    double sigma_min;
+    if (R < 1e-6) {
+        sigma_min = 720.0;   /* 接近均匀分布 → 覆盖全天 */
+    }
+    else {
+        double sigma_rad = sqrt(-2.0 * log(R));
+        if (sigma_rad > 3.14159265358979323846) sigma_rad = 3.14159265358979323846;
+        sigma_min = sigma_rad / TWO_PI * 1440.0;
+    }
+
+    double h = 1.06 * sigma_min * pow((double)n, -0.2);
+    if (h < 15.0) h = 15.0;     /* 下限，避免带宽为 0 导致过拟合 */
+    if (h > 120.0) h = 120.0;   /* 上限，避免过度平滑 */
+    return h;
+}
+
 /* 圆核密度估计，返回概率密度最大的时刻（分钟） */
 static double kde_peak_minutes(const std::vector<double>& t) {
     int n = (int)t.size();
     if (n == 0) return -1.0;
 
-    double h = (n < 5) ? 45.0 : 30.0;   /* 带宽（分钟） */
+    double h = kde_bandwidth_minutes(t);
     double best = -1.0, bestT = 0.0;
     for (int m = 0; m < 1440; m++) {
         double sum = 0.0;
@@ -94,6 +125,7 @@ static bool compute(AnalysisResult* r) {
 
     r->peak_minutes = kde_peak_minutes(r->start_times);
     r->mean_minutes = circ_mean_minutes(r->start_times);
+    r->bandwidth_minutes = kde_bandwidth_minutes(r->start_times);
 
     std::vector<DWORD> d = r->durations;
     std::sort(d.begin(), d.end());
@@ -154,7 +186,7 @@ static void DrawStartChart(Graphics* g, const AnalysisResult* r, const RectF& ar
     /* KDE 曲线 */
     if (r->start_times.size() >= 3) {
         Pen kdePen(Color(220, 60, 60), 2.0f);
-        double h = (r->start_times.size() < 5) ? 45.0 : 30.0;
+        double h = r->bandwidth_minutes > 0 ? r->bandwidth_minutes : 30.0;
         double maxD = 0.0;
         for (int m = 0; m < 1440; m += 2) {
             double s = 0.0;
@@ -200,9 +232,22 @@ static void DrawDurationChart(Graphics* g, const AnalysisResult* r, const RectF&
     Pen axisPen(Color(80, 80, 80), 1.0f);
     g->DrawRectangle(&axisPen, area);
 
-    DWORD maxD = r->max_sec > 0 ? r->max_sec : 1;
+    /* 用 90 分位数作为绘图上限，避免个别超长会话把柱状图压成一条线 */
+    std::vector<DWORD> d = r->durations;
+    std::sort(d.begin(), d.end());
+    DWORD displayMax = d.empty() ? 1 : d.back();
+    if (d.size() >= 4) {
+        size_t idx = (size_t)(d.size() * 0.90);
+        if (idx >= d.size()) idx = d.size() - 1;
+        displayMax = d[idx];
+    }
+    if (displayMax < 1) displayMax = 1;
+    if ((double)r->median_sec > (double)displayMax) {
+        displayMax = (DWORD)(r->median_sec + 0.5);
+    }
+
     int nb = 24;
-    double binW = (double)maxD / nb;
+    double binW = (double)displayMax / nb;
     if (binW < 1.0) binW = 1.0;
 
     int bins[32] = { 0 };
@@ -227,8 +272,8 @@ static void DrawDurationChart(Graphics* g, const AnalysisResult* r, const RectF&
     }
 
     /* 中位数竖线 */
-    if (r->median_sec >= 0 && maxD > 0) {
-        REAL mx = area.X + area.Width * (REAL)(r->median_sec / (double)maxD);
+    if (r->median_sec >= 0 && displayMax > 0) {
+        REAL mx = area.X + area.Width * (REAL)(r->median_sec / (double)displayMax);
         if (mx > area.X + area.Width) mx = area.X + area.Width;
         Pen medPen(Color(200, 80, 0), 2.0f);
         g->DrawLine(&medPen, mx, area.Y, mx, area.Y + area.Height - 12.0f);

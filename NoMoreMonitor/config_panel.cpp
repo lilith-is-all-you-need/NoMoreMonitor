@@ -2,11 +2,15 @@
 #include "img_loader.h"
 #include "preview_window.h"
 #include <commdlg.h>
+#include <commctrl.h>
 #include <windowsx.h>
-#include <shlobj.h>
+#include <shobjidl.h>
+#include <objbase.h>
 #include <stdio.h>
 
 #pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "ole32.lib")
 
 #define PANEL_CLASS   L"NoMoreMonitorConfigPanel"
 #define CONTENT_CLASS L"NoMoreMonitorContent"
@@ -49,6 +53,8 @@ enum {
     IDC_PREVIEW_STATE,
     IDC_PREVIEW,
     IDC_BTN_PREVIEW,
+    IDC_IMAGE_SCALE,
+    IDC_IMAGE_SCALE_LBL,
 
     IDC_CHK_SHOW_CONSOLE,
     IDC_CONSOLE_COLOR,
@@ -93,6 +99,8 @@ struct PanelData {
     bool advanced;          /* 专业模式 */
     wchar_t previewPath[MAX_PATH];
     HBRUSH swatchBrush[4];
+    COLORREF swatchColor[4];
+    bool swatchColorSet[4];
     HFONT hFont;
     bool hFontCreated;
 };
@@ -299,6 +307,13 @@ static void write_controls(PanelData* pd) {
         SendDlgItemMessageW(c, IDC_CHK_SHOW_IMAGE, BM_SETCHECK, pd->work.show_image ? BST_CHECKED : BST_UNCHECKED, 0);
         SendDlgItemMessageW(c, IDC_CHK_REPLACE, BM_SETCHECK, pd->work.image_replace ? BST_CHECKED : BST_UNCHECKED, 0);
 
+        SendDlgItemMessageW(c, IDC_IMAGE_SCALE, TBM_SETPOS, TRUE, pd->work.image_scale);
+        {
+            wchar_t buf[32];
+            swprintf_s(buf, L"%d%%", pd->work.image_scale);
+            SetDlgItemTextW(c, IDC_IMAGE_SCALE_LBL, buf);
+        }
+
         SetDlgItemTextW(c, IDC_DATA_DIR, pd->work.data_dir);
 
         SetDlgItemTextW(c, IDC_START_TITLE, pd->work.start_title);
@@ -349,6 +364,9 @@ static void read_controls(PanelData* pd) {
 
         pd->work.show_image = (SendDlgItemMessageW(c, IDC_CHK_SHOW_IMAGE, BM_GETCHECK, 0, 0) == BST_CHECKED);
         pd->work.image_replace = (SendDlgItemMessageW(c, IDC_CHK_REPLACE, BM_GETCHECK, 0, 0) == BST_CHECKED);
+        pd->work.image_scale = (int)SendDlgItemMessageW(c, IDC_IMAGE_SCALE, TBM_GETPOS, 0, 0);
+        if (pd->work.image_scale < 10) pd->work.image_scale = 10;
+        if (pd->work.image_scale > 400) pd->work.image_scale = 400;
 
         GetDlgItemTextW(c, IDC_DATA_DIR, pd->work.data_dir, _countof(pd->work.data_dir));
 
@@ -395,18 +413,52 @@ static void browse_image(HWND hwnd, PanelData* pd, int editId) {
 }
 
 static void browse_data_dir(HWND hwnd, PanelData* pd) {
-    BROWSEINFOW bi = { 0 };
-    bi.hwndOwner = hwnd;
-    bi.lpszTitle = L"选择 spy 数据存储目录";
-    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-    PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&bi);
-    if (pidl) {
-        wchar_t path[MAX_PATH] = { 0 };
-        if (SHGetPathFromIDListW(pidl, path)) {
-            SetDlgItemTextW(pd->hContent, IDC_DATA_DIR, path);
+    HRESULT hrInit = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    bool need_uninit = SUCCEEDED(hrInit);
+
+    IFileOpenDialog* dlg = NULL;
+    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                                   IID_IFileOpenDialog, (void**)&dlg)) && dlg) {
+        DWORD opts = 0;
+        if (SUCCEEDED(dlg->GetOptions(&opts))) {
+            dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
         }
-        CoTaskMemFree(pidl);
+        dlg->SetTitle(L"选择 spy 数据存储目录");
+
+        if (SUCCEEDED(dlg->Show(hwnd))) {
+            IShellItem* item = NULL;
+            if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+                PWSTR path = NULL;
+                if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                    /* 立即做一次“可写”探测，避免选了个只读目录到 spy 时才发现写不进 */
+                    bool writable = false;
+                    wchar_t probe[MAX_PATH] = { 0 };
+                    swprintf_s(probe, _countof(probe), L"%s\\.nm_write_test", path);
+                    HANDLE hp = CreateFileW(probe, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                            CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, NULL);
+                    if (hp != INVALID_HANDLE_VALUE) {
+                        CloseHandle(hp);
+                        DeleteFileW(probe);
+                        writable = true;
+                    }
+
+                    if (writable) {
+                        SetDlgItemTextW(pd->hContent, IDC_DATA_DIR, path);
+                    }
+                    else {
+                        wchar_t msg[160];
+                        swprintf_s(msg, L"该目录不可写（err=%lu）。\n\n若是管理员仍被拒，请检查 Windows 安全中心 → 勒索软件防护 → 受控文件夹访问。", GetLastError());
+                        MessageBoxW(hwnd, msg, L"NoMoreMonitor", MB_OK | MB_ICONWARNING);
+                    }
+                    CoTaskMemFree(path);
+                }
+                item->Release();
+            }
+        }
+        dlg->Release();
     }
+
+    if (need_uninit) CoUninitialize();
 }
 
 /* ---------- 滚动 ---------- */
@@ -457,6 +509,8 @@ static void build_content(PanelData* pd) {
     if (pd->hContent) { DestroyWindow(pd->hContent); pd->hContent = NULL; pd->hPreview = NULL; }
     for (int i = 0; i < 4; i++) {
         if (pd->swatchBrush[i]) { DeleteObject(pd->swatchBrush[i]); pd->swatchBrush[i] = NULL; }
+        pd->swatchColorSet[i] = false;
+        pd->swatchColor[i] = RGB(0, 0, 0);
     }
 
     pd->hContent = CreateWindowExW(0, CONTENT_CLASS, L"", WS_CHILD | WS_VISIBLE,
@@ -514,6 +568,17 @@ static void build_content(PanelData* pd) {
         y += 26;
         make_check(pd->hContent, IDC_CHK_REPLACE, L"图片替代文字（否则叠加）", pd->work.image_replace, LX, y, pd->hFont);
         y += 28;
+        {
+            make_label(pd->hContent, L"显示缩放", LX, y, pd->hFont);
+            HWND scale = make_ctl(pd->hContent, TRACKBAR_CLASSW, L"",
+                                  WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
+                                  LX + LABEL_W, y, 220, 28, IDC_IMAGE_SCALE, pd->hFont);
+            SendMessageW(scale, TBM_SETRANGE, TRUE, MAKELPARAM(10, 400));
+            SendMessageW(scale, TBM_SETTICFREQ, 10, 0);
+            SendMessageW(scale, TBM_SETPOS, TRUE, pd->work.image_scale);
+            make_ctl(pd->hContent, L"STATIC", L"", 0, LX + LABEL_W + 232, y + 4, 80, 20, IDC_IMAGE_SCALE_LBL, pd->hFont);
+            y += ROW_H + GAP;
+        }
         y = add_path_row(pd, L"开始图片", IDC_START_IMAGE, IDC_START_IMAGE_BROWSE, pd->work.start_image, y);
         y = add_path_row(pd, L"监视中图片", IDC_WATCHING_IMAGE, IDC_WATCHING_IMAGE_BROWSE, pd->work.watching_image, y);
         y = add_path_row(pd, L"结束图片", IDC_STOP_IMAGE, IDC_STOP_IMAGE_BROWSE, pd->work.stop_image, y);
@@ -638,8 +703,13 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         int idx = swatch_index(id);
         if (idx >= 0 && pd) {
             COLORREF c = get_color_by_id(pd, id);
-            if (pd->swatchBrush[idx]) { DeleteObject(pd->swatchBrush[idx]); pd->swatchBrush[idx] = NULL; }
-            pd->swatchBrush[idx] = CreateSolidBrush(c);
+            /* 仅当颜色变化时才重建画刷，避免每次重绘都创建/删除 GDI 对象 */
+            if (!pd->swatchBrush[idx] || !pd->swatchColorSet[idx] || pd->swatchColor[idx] != c) {
+                if (pd->swatchBrush[idx]) { DeleteObject(pd->swatchBrush[idx]); pd->swatchBrush[idx] = NULL; }
+                pd->swatchBrush[idx] = CreateSolidBrush(c);
+                pd->swatchColor[idx] = c;
+                pd->swatchColorSet[idx] = true;
+            }
             SetBkColor(hdc, c);
             return (LRESULT)pd->swatchBrush[idx];
         }
@@ -709,7 +779,9 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     wchar_t path[MAX_PATH] = { 0 };
                     GetDlgItemTextW(pd->hContent, editId, path, MAX_PATH);
                     if (path[0]) {
-                        show_image_preview(path);
+                        if (!show_image_preview(path, pd->work.image_scale)) {
+                            MessageBoxW(hwnd, L"无法加载该图片文件，请确认路径与文件格式。", L"预览", MB_OK | MB_ICONWARNING);
+                        }
                     }
                     else {
                         MessageBoxW(hwnd, L"请先设置该状态的图片路径", L"预览", MB_OK | MB_ICONINFORMATION);
@@ -721,9 +793,16 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 if (pd) {
                     read_controls(pd);
                     pd->work.advanced_mode = pd->advanced;   /* 记住专业模式开关 */
-                    config_save(&pd->work, NULL);
-                    *(pd->target) = pd->work;
-                    DestroyWindow(hwnd);
+                    if (config_save(&pd->work, NULL)) {
+                        *(pd->target) = pd->work;
+                        /* 控制台颜色/标题/显隐立即生效，无需重启 */
+                        config_apply_console();
+                        MessageBoxW(hwnd, L"设置已保存。", L"NoMoreMonitor", MB_OK | MB_ICONINFORMATION);
+                        DestroyWindow(hwnd);
+                    }
+                    else {
+                        MessageBoxW(hwnd, L"保存失败：无法写入配置文件。请确认程序目录可写。", L"NoMoreMonitor", MB_OK | MB_ICONERROR);
+                    }
                 }
                 return 0;
 
@@ -738,6 +817,19 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 }
                 return 0;
             }
+        }
+        break;
+    }
+
+    case WM_HSCROLL: {
+        /* 图片显示缩放滑动条 */
+        if (pd && (HWND)lParam == GetDlgItem(pd->hContent, IDC_IMAGE_SCALE)) {
+            int pos = (int)SendDlgItemMessageW(pd->hContent, IDC_IMAGE_SCALE, TBM_GETPOS, 0, 0);
+            pd->work.image_scale = pos;
+            wchar_t buf[32];
+            swprintf_s(buf, L"%d%%", pos);
+            SetDlgItemTextW(pd->hContent, IDC_IMAGE_SCALE_LBL, buf);
+            return 0;
         }
         break;
     }
@@ -789,6 +881,16 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
 void config_panel_show(HINSTANCE hInstance, AppConfig* cfg) {
     if (!cfg) return;
+
+    /* 注册 trackbar 等通用控件（滑动条） */
+    {
+        static bool cc_ready = false;
+        if (!cc_ready) {
+            INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_BAR_CLASSES };
+            InitCommonControlsEx(&icc);
+            cc_ready = true;
+        }
+    }
 
     static bool registered = false;
     if (!registered) {

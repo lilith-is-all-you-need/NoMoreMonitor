@@ -3,6 +3,7 @@
 #include "img_loader.h"
 #include <gdiplus.h>
 #include <stdlib.h>
+#include <wchar.h>
 
 #pragma comment(lib, "gdiplus.lib")
 
@@ -10,6 +11,21 @@ using namespace Gdiplus;
 
 static ULONG_PTR g_gdiplusToken = 0;
 static bool g_osd_ready = false;
+
+/* OSD 图片缓存：路径/缩放不变时复用已缩放/预乘的位图，避免淡出期间反复读盘解码 */
+static wchar_t g_img_cache_path[MAX_PATH] = { 0 };
+static unsigned char* g_img_cache_bgra = NULL;   /* 预乘 BGRA */
+static int g_img_cache_w = 0;
+static int g_img_cache_h = 0;
+static int g_img_cache_scale = 0;
+
+static void clear_img_cache(void) {
+    if (g_img_cache_bgra) { free(g_img_cache_bgra); g_img_cache_bgra = NULL; }
+    g_img_cache_path[0] = L'\0';
+    g_img_cache_w = 0;
+    g_img_cache_h = 0;
+    g_img_cache_scale = 0;
+}
 
 bool osd_init(void) {
     GdiplusStartupInput si;
@@ -23,6 +39,7 @@ bool osd_init(void) {
 
 void osd_shutdown(void) {
     if (g_osd_ready) {
+        clear_img_cache();
         GdiplusShutdown(g_gdiplusToken);
         g_gdiplusToken = 0;
         g_osd_ready = false;
@@ -83,45 +100,76 @@ static void draw_text_at(Graphics* g, const wchar_t* text, int w, int h,
     g->DrawString(text, -1, &font, dest, &fmt, &brush);
 }
 
-static bool draw_image_fit(Graphics* g, const wchar_t* path, int w, int h) {
+static bool draw_image_fit(Graphics* g, const wchar_t* path, int w, int h, int scale_percent, int alpha) {
     if (!path || path[0] == L'\0') return false;
+    if (scale_percent < 10) scale_percent = 10;
+    if (scale_percent > 400) scale_percent = 400;
+    if (alpha <= 0) return false;
 
-    /* stb_image 纯 C 解码（无 WIC/COM/WinRT），参照 NoMoreCapture */
-    int iw = 0, ih = 0;
-    unsigned char* px = img_load_file(path, &iw, &ih);
-    if (!px || iw <= 0 || ih <= 0) { img_free(px); return false; }
+    /* 路径/缩放变化才重新加载+缩放（淡出期间反复渲染时直接复用缓存） */
+    if (wcscmp(g_img_cache_path, path) != 0 || g_img_cache_scale != scale_percent ||
+        g_img_cache_w <= 0 || g_img_cache_h <= 0) {
+        clear_img_cache();
 
-    /* stbi RGBA(直通 alpha) → 预乘 BGRA，供 GDI+ PixelFormat32bppPARGB 使用 */
-    unsigned char* pargb = (unsigned char*)malloc((size_t)iw * ih * 4);
-    if (!pargb) { img_free(px); return false; }
-    for (int i = 0; i < iw * ih; i++) {
-        int a = px[i * 4 + 3];
-        pargb[i * 4 + 0] = (BYTE)(px[i * 4 + 2] * a / 255);  /* B */
-        pargb[i * 4 + 1] = (BYTE)(px[i * 4 + 1] * a / 255);  /* G */
-        pargb[i * 4 + 2] = (BYTE)(px[i * 4 + 0] * a / 255);  /* R */
-        pargb[i * 4 + 3] = (BYTE)a;
-    }
-    img_free(px);
+        int iw = 0, ih = 0;
+        unsigned char* px = img_load_file(path, &iw, &ih);
+        if (!px || iw <= 0 || ih <= 0) { img_free(px); return false; }
 
-    REAL scale = ((REAL)w / (REAL)iw) < ((REAL)h / (REAL)ih)
-        ? ((REAL)w / (REAL)iw)
-        : ((REAL)h / (REAL)ih);
-    int dw = (int)(iw * scale);
-    int dh = (int)(ih * scale);
-    int dx = (w - dw) / 2;
-    int dy = (h - dh) / 2;
+        /* 适配屏幕的基准缩放，再乘用户缩放比例 */
+        double fit = ((double)w / iw) < ((double)h / ih) ? ((double)w / iw) : ((double)h / ih);
+        double scale = fit * scale_percent / 100.0;
+        if (scale < 1e-6) scale = 1e-6;
+        int dw = (int)(iw * scale), dh = (int)(ih * scale);
+        if (dw < 1) dw = 1;
+        if (dh < 1) dh = 1;
 
-    bool ok = false;
-    {
-        Bitmap bmp(iw, ih, iw * 4, PixelFormat32bppPARGB, pargb);
-        if (bmp.GetLastStatus() == Ok) {
-            g->SetInterpolationMode(InterpolationModeHighQualityBicubic);
-            g->DrawImage(&bmp, dx, dy, dw, dh);
-            ok = true;
+        /* Catmull-Rom 锐化缩放（stb_image_resize2），比 GDI+ 双三次更清晰 */
+        unsigned char* scaled = img_scale_rgba(px, &iw, &ih, dw, dh);
+        if (scaled == px) { dw = iw; dh = ih; }   /* 缩放失败则回退原尺寸 */
+
+        /* RGBA(直通 alpha) → 预乘 BGRA，供 GDI+ PixelFormat32bppPARGB 使用 */
+        unsigned char* bgra = (unsigned char*)malloc((size_t)dw * dh * 4);
+        if (!bgra) { img_free(scaled); return false; }
+        for (int i = 0; i < dw * dh; i++) {
+            int a = scaled[i * 4 + 3];
+            bgra[i * 4 + 0] = (BYTE)(scaled[i * 4 + 2] * a / 255);  /* B */
+            bgra[i * 4 + 1] = (BYTE)(scaled[i * 4 + 1] * a / 255);  /* G */
+            bgra[i * 4 + 2] = (BYTE)(scaled[i * 4 + 0] * a / 255);  /* R */
+            bgra[i * 4 + 3] = (BYTE)a;
         }
+        img_free(scaled);
+
+        wcsncpy_s(g_img_cache_path, _countof(g_img_cache_path), path, _TRUNCATE);
+        g_img_cache_bgra = bgra;
+        g_img_cache_w = dw;
+        g_img_cache_h = dh;
+        g_img_cache_scale = scale_percent;
     }
-    free(pargb);
-    return ok;
+
+    int dx = (w - g_img_cache_w) / 2;
+    int dy = (h - g_img_cache_h) / 2;
+
+    /* 已经缩放到目标尺寸，1:1 绘制，不再二次插值；按 alpha 整体淡入淡出 */
+    Bitmap bmp(g_img_cache_w, g_img_cache_h, g_img_cache_w * 4, PixelFormat32bppPARGB, g_img_cache_bgra);
+    if (bmp.GetLastStatus() != Ok) return false;
+    g->SetInterpolationMode(InterpolationModeNearestNeighbor);
+
+    if (alpha >= 255) {
+        g->DrawImage(&bmp, dx, dy, g_img_cache_w, g_img_cache_h);
+    }
+    else {
+        ColorMatrix cm = { 0 };
+        cm.m[0][0] = 1.0f;
+        cm.m[1][1] = 1.0f;
+        cm.m[2][2] = 1.0f;
+        cm.m[3][3] = (REAL)alpha / 255.0f;
+        cm.m[4][4] = 1.0f;
+        ImageAttributes ia;
+        ia.SetColorMatrix(&cm, ColorMatrixFlagsDefault, ColorAdjustTypeBitmap);
+        Rect dest(dx, dy, g_img_cache_w, g_img_cache_h);
+        g->DrawImage(&bmp, dest, 0, 0, g_img_cache_w, g_img_cache_h, UnitPixel, &ia);
+    }
+    return true;
 }
 
 void osd_render(HWND hwnd, int state, const AppConfig* cfg, const wchar_t* log_text, float text_alpha) {
@@ -162,16 +210,17 @@ void osd_render(HWND hwnd, int state, const AppConfig* cfg, const wchar_t* log_t
     g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
     g.Clear(Color(0, 0, 0, 0));
 
+    int alpha = (int)(text_alpha * 255.0f + 0.5f);
+    if (alpha < 0) alpha = 0;
+    if (alpha > 255) alpha = 255;
+
     bool has_image = false;
-    if (cfg->show_image) {
-        has_image = draw_image_fit(&g, image_path, w, h);
+    if (cfg->show_image && alpha > 0) {
+        has_image = draw_image_fit(&g, image_path, w, h, cfg->image_scale, alpha);
     }
 
     bool draw_text = !(has_image && cfg->image_replace);
     if (draw_text && state_text && state_text[0] != L'\0' && state != status_waiting) {
-        int alpha = (int)(text_alpha * 255.0f + 0.5f);
-        if (alpha < 0) alpha = 0;
-        if (alpha > 255) alpha = 255;
         draw_text_at(&g, state_text, w, h, state_color, alpha, true,
                      cfg->text_position, cfg->text_offset_x, cfg->text_offset_y, 0);
     }
