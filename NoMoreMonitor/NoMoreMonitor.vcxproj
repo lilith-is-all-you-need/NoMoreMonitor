@@ -73,6 +73,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
@@ -90,6 +91,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
@@ -112,6 +114,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
@@ -128,6 +131,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
@@ -144,16 +148,36 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="analysis.cpp" />
+    <ClCompile Include="config.c" />
+    <ClCompile Include="config_panel.cpp" />
+    <ClCompile Include="img_loader.c" />
     <ClCompile Include="injector.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="messager.c" />
     <ClCompile Include="notice.c" />
+    <ClCompile Include="osd_render.cpp" />
+    <ClCompile Include="position_panel.cpp" />
+    <ClCompile Include="preview_window.c" />
+    <ClCompile Include="spy_data.c" />
+    <ClCompile Include="stbi_imp.c" />
+    <ClCompile Include="stbir_imp.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="analysis.h" />
+    <ClInclude Include="config.h" />
+    <ClInclude Include="config_panel.h" />
+    <ClInclude Include="img_loader.h" />
     <ClInclude Include="injector.h" />
     <ClInclude Include="messager.h" />
     <ClInclude Include="notice.h" />
+    <ClInclude Include="osd_render.h" />
+    <ClInclude Include="position_panel.h" />
+    <ClInclude Include="preview_window.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="spy_data.h" />
+    <ClInclude Include="stb_image.h" />
+    <ClInclude Include="stb_image_resize2.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="NoMoreMonitor.rc" />

@@ -2,7 +2,12 @@
 #include <Windows.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef __cplusplus
+extern "C" {
+#else
 #include <stdbool.h>
+#endif
 
 enum {
 	status_waiting = 0,
@@ -24,7 +29,11 @@ extern HANDLE event;
 extern HANDLE mapping;
 extern void* ptr_buf;
 extern HANDLE msg_thread;
-extern HANDLE mutex;        
-extern HANDLE quit_event;    
+extern HANDLE mutex;
+extern HANDLE quit_event;
 bool messager_init();
 void messager_uninit(void);
+
+#ifdef __cplusplus
+}
+#endif

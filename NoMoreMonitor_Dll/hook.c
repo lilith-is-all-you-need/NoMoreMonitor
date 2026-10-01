@@ -1,8 +1,9 @@
-﻿#include <Windows.h>
+#include <Windows.h>
 #include <stdbool.h>
-#include <stdio.h>  =
+#include <stdio.h>
 #include "MinHook.h"
 #include "messager.h"
+#include "..\NoMoreMonitor\config.h"
 
 
 typedef int(__fastcall* pfn_ds_capture_start)(void* ptr_this, void* edx); // ordinal:76
@@ -51,23 +52,32 @@ bool is_init = false;
 static volatile LONG g_in_hook = 0;
 static volatile LONG g_in_mf_hook = 0; 
 
-void countdown_delay(int seconds) {
-	wchar_t msg_buf[64];
+void countdown_delay(int seconds, const wchar_t* fmt) {
+	wchar_t msg_buf[256];
 	for (int i = seconds; i > 0; i--) {
-		swprintf_s(msg_buf, 64, L"Delay %d s", i);
+		swprintf_s(msg_buf, _countof(msg_buf), fmt, i);
 		msg_pass(msg_buf, status_log, 0);
 		smart_delay(1000); // 每次延时 1 秒
 	}
+}
+
+/* 从与 DLL 同目录的 NoMoreMonitor.ini 读取最新配置 */
+static void dll_load_config(AppConfig* cfg) {
+	HMODULE self = GetModuleHandleW(L"NoMoreMonitor_Dll.dll");
+	config_load(cfg, self);
 }
 
 int __fastcall hooked_ds_capture_start(void* ptr_this, void* edx) {
 	if (InterlockedCompareExchange(&g_in_hook, 1, 0) != 0) {
 		return orig_ds_capture_start(ptr_this, edx);
 	}
+	AppConfig cfg;
+	dll_load_config(&cfg);
+
 	msg_pass(L"DS capture start!", status_start, 0);
 	Sleep(50);
 
-	countdown_delay(5);
+	countdown_delay(cfg.pause_seconds, cfg.countdown_text);
 
 	msg_pass(L"watching", status_watching, 0);
 	int ret = orig_ds_capture_start(ptr_this, edx);
@@ -80,11 +90,14 @@ bool __fastcall hooked_mf_capture_start(void* ptr_this, void* edx) {
 		return orig_mf_capture_start(ptr_this, edx);
 	}
 
+	AppConfig cfg;
+	dll_load_config(&cfg);
+
 	msg_pass(L"MF capture start!", status_start, 0);
 
 	Sleep(50);
 
-	countdown_delay(5);
+	countdown_delay(cfg.pause_seconds, cfg.countdown_text);
 
 	msg_pass(L"watching", status_watching, 0);
 
@@ -95,12 +108,12 @@ bool __fastcall hooked_mf_capture_start(void* ptr_this, void* edx) {
 }
 void __fastcall hooked_ds_capture_stop(void* ptr_this, void* edx) {
 	msg_pass(L"we are safe now... temporarily", status_stop, 0);
-	return orig_ds_capture_stop(ptr_this, edx);
+	orig_ds_capture_stop(ptr_this, edx);
 }
 
 void __fastcall hooked_mf_capture_stop(void* ptr_this, void* edx) {
 	msg_pass(L"we are safe now... temporarily", status_stop, 0);
-	return orig_mf_capture_stop(ptr_this, edx);
+	orig_mf_capture_stop(ptr_this, edx);
 }
 
 bool init_hook() {
@@ -114,25 +127,25 @@ bool init_hook() {
 		return false;
 	}
 	int ret = 0;
-	ret = MH_CreateHook(GetProcAddress(target_dll, MAKEINTRESOURCEA(76)),hooked_ds_capture_start,&orig_ds_capture_start);
+	ret = MH_CreateHook(GetProcAddress(target_dll, MAKEINTRESOURCEA(76)), hooked_ds_capture_start, (LPVOID*)&orig_ds_capture_start);
 	if (ret != MH_OK) {
 		msg_pass(L"can't create a hook on ord:76", status_error, -1);
 		MH_Uninitialize();
 		return false;
 	}
-	ret = MH_CreateHook(GetProcAddress(target_dll, MAKEINTRESOURCEA(86)), hooked_ds_capture_stop, &orig_ds_capture_stop);
+	ret = MH_CreateHook(GetProcAddress(target_dll, MAKEINTRESOURCEA(86)), hooked_ds_capture_stop, (LPVOID*)&orig_ds_capture_stop);
 	if (ret != MH_OK) {
 		msg_pass(L"can't create a hook on ord:86", status_error, -1);
 		MH_Uninitialize();
 		return false;
 	}
-	ret = MH_CreateHook(GetProcAddress(target_dll, MAKEINTRESOURCEA(77)), hooked_mf_capture_start, &orig_mf_capture_start);
+	ret = MH_CreateHook(GetProcAddress(target_dll, MAKEINTRESOURCEA(77)), hooked_mf_capture_start, (LPVOID*)&orig_mf_capture_start);
 	if (ret != MH_OK) {
 		msg_pass(L"can't create a hook on ord:77", status_error, -1);
 		MH_Uninitialize();
 		return false;
 	}
-	ret = MH_CreateHook(GetProcAddress(target_dll, MAKEINTRESOURCEA(87)), hooked_mf_capture_stop, &orig_mf_capture_stop);
+	ret = MH_CreateHook(GetProcAddress(target_dll, MAKEINTRESOURCEA(87)), hooked_mf_capture_stop, (LPVOID*)&orig_mf_capture_stop);
 	if (ret != MH_OK) {
 		msg_pass(L"can't create a hook on ord:87", status_error, -1);
 		MH_Uninitialize();
