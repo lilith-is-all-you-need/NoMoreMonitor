@@ -432,6 +432,7 @@ static void browse_data_dir(HWND hwnd, PanelData* pd) {
                 if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
                     /* 立即做一次“可写”探测，避免选了个只读目录到 spy 时才发现写不进 */
                     bool writable = false;
+                    DWORD probe_err = 0;
                     wchar_t probe[MAX_PATH] = { 0 };
                     swprintf_s(probe, _countof(probe), L"%s\\.nm_write_test", path);
                     HANDLE hp = CreateFileW(probe, GENERIC_WRITE, FILE_SHARE_READ, NULL,
@@ -441,13 +442,21 @@ static void browse_data_dir(HWND hwnd, PanelData* pd) {
                         DeleteFileW(probe);
                         writable = true;
                     }
+                    else {
+                        probe_err = GetLastError();
+                    }
 
                     if (writable) {
                         SetDlgItemTextW(pd->hContent, IDC_DATA_DIR, path);
                     }
                     else {
-                        wchar_t msg[160];
-                        swprintf_s(msg, L"该目录不可写（err=%lu）。\n\n若是管理员仍被拒，请检查 Windows 安全中心 → 勒索软件防护 → 受控文件夹访问。", GetLastError());
+                        wchar_t msg[512];
+                        swprintf_s(msg, L"该目录不可写（err=%lu）。\n\n路径：%s\n\n"
+                                        L"这不是 UAC/管理员权限问题。本机常见原因是火绒等安全软件的"
+                                        L"「勒索病毒防护 / 文件防护」拦截了未签名程序写入。\n\n"
+                                        L"处理：把 NoMoreMonitor.exe 加入火绒「信任区」，"
+                                        L"或暂时关闭「增强勒索病毒防护」后重试。",
+                                   probe_err, path);
                         MessageBoxW(hwnd, msg, L"NoMoreMonitor", MB_OK | MB_ICONWARNING);
                     }
                     CoTaskMemFree(path);

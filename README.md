@@ -103,11 +103,43 @@
 * 设置保存后控制台颜色/标题/显隐不立即生效：新增 `config_apply_console()`，启动与保存时统一应用。
 * 设置保存无成功/失败提示：保存结果改为弹窗提示，失败时不关闭面板。
 * 统计分析带宽为固定经验值：圆 KDE 带宽改为数据驱动（圆标准差 + Silverman 法则），时长直方图改用 90 分位数上限，小样本更稳健。
+* 设置 spy 路径时「不可写」提示误导排查方向：探测失败会保存真实错误码，并指向 Low 完整性 / MOTW，而不是笼统地建议查 Defender。
+
+## 🔍 已知问题与排查 (Known Issues)
+
+### 自定义 spy 数据目录报「该目录不可写（err=5）」
+
+**现象**：设置数据目录时弹窗提示不可写；即使 UAC 提权（`TokenElevation=YES`）仍然 `err=5`；但资源管理器 / PowerShell 在同一目录建文件夹却正常。默认目录（程序旁的 `NoMoreMonitor\`）往往又能写。
+
+**根因**：不是 NTFS ACL，也与数字签名 / 杀软无关，而是 **Windows Mandatory Integrity Control（强制完整性控制，No-Write-Up）**。
+
+若程序所在目录树被打上了 `Mandatory Label\Low Mandatory Level`（常见于从网络下载/解压、或被标为「不可信」后残留），则**从该树启动的进程完整性级别为 Low**。Low 进程可以写同为 Low 的对象（所以默认数据目录“碰巧”可用），但**不能写 Medium 完整性对象**（用户文档目录、`D:\` 下目录等），表现就是 `CreateFile` / `CreateDirectory` 一律 `ERROR_ACCESS_DENIED`。UAC 提权改变的是管理员令牌，**不会**提高完整性级别。
+
+**排查**：
+
+```bat
+icacls NoMoreMonitor.exe
+```
+
+若出现 `Mandatory Label\Low Mandatory Level`，即中招。也可用调试工具打印进程完整性级别（Low=`0x1000` / Medium=`0x2000` / High=`0x3000`）。
+
+**处理**（任选其一）：
+
+```bat
+icacls "C:\path\to\NoMoreMonitor.exe" /setintegritylevel M
+rem 或对整个目录树：
+icacls "C:\path\to\folder" /setintegritylevel "(OI)(CI)M" /T /C
+```
+
+或把 `NoMoreMonitor.exe` + `NoMoreMonitor_Dll.dll` 解压/安装到未带 Low 标签的目录再运行。若文件属性里有「**解除锁定**」，请一并勾选（去掉 MOTW，避免 SmartScreen 再拦一次）。
+
+### 预览图片时调试器中断 `winrt::hresult_error`
+
+第三方 shell 扩展（如百度网盘 `YunShellExtV1.dll`）在枚举命名空间时抛出的良性首次机会异常（`0x80070490`），Release 不受影响。调试时可在 VS「调试 → 窗口 → 异常设置」中取消勾选 C++ 异常的 `winrt::hresult_error`，或按 F5 继续。
 
 ## 📝 待办事项 (TODO)
 
-* **预览/浏览图片时触发 `winrt::hresult_error` 首次机会异常**：这是第三方 shell 扩展（百度网盘 `YunShellExtV1.dll` 等）在 shell 命名空间枚举时抛出的良性异常（`0x80070490`，被系统内部捕获，不影响 Release 运行），但调试器会中断。规避方式：Visual Studio「调试 → 窗口 → 异常设置」中取消勾选 C++ 异常的 `winrt::hresult_error`，或按 F5 继续；若仍想在代码层彻底规避，需换成纯文件系统选择器（不经过 shell，已评估但暂不采用）。
-* **自定义 spy 数据目录写入被拒（未解决）**：即使以管理员运行（`TokenElevation` 确认已提权），`spy_data_append` 在自定义目录创建 `spy_log.csv` 仍报 `err=5`（拒绝访问），连手动 `mkdir` 可写的 `D:\test` 也会被“可写探测”判为不可写；但非提权 PowerShell 却能 `mkdir`。已排除普通 NTFS ACL（管理员本可绕过）与 `FILE_APPEND_DATA` 无法建文件的可能（实测可建）。高度怀疑是 Windows Defender「受控文件夹访问」或第三方杀软（360/火绒/电脑管家等）的防勒索/文档保护，按“未签名程序”在拦截（不区分是否管理员）。当前规避：自定义目录写失败会自动回退到程序同目录 `NoMoreMonitor\spy_log.csv`。待办：在安全软件中把 `NoMoreMonitor.exe` 加白（或关闭受控文件夹访问）后复测确认根因。
+* 若仍想在代码层彻底规避 shell 枚举异常，可换成纯文件系统目录选择器（已评估，暂不采用）。
 
 
 ## ⚠️ 免责声明 (Disclaimer)
