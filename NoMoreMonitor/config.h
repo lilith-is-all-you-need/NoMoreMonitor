@@ -31,6 +31,8 @@ typedef struct AppConfig {
     wchar_t  watching_text[128];
     wchar_t  stop_text[128];
     wchar_t  countdown_text[128];  /* 倒计时文字，可用 %d 表示剩余秒数 */
+    int      text_font_size;       /* 主状态文字字号(px)，默认 120 */
+    int      letter_spacing;       /* 字间距(px)，可为负，默认 0 */
 
     /* ---- OSD 文字位置：0~8 九宫格(0左上 1上 2右上 3左 4中 5右 6左下 7下 8右下) ---- */
     int      text_position;
@@ -51,6 +53,12 @@ typedef struct AppConfig {
     wchar_t  stop_title[64];
     wchar_t  stop_body[256];
     wchar_t  tray_tip[128];
+    wchar_t  toast_sound[MAX_PATH]; /* Toast 提示音路径，空串=系统默认 */
+
+    /* ---- Toast 外观 ---- */
+    COLORREF toast_bg_color;        /* Toast 背景色 */
+    COLORREF toast_accent_color;    /* 左侧竖线（强调色） */
+    wchar_t  toast_image[MAX_PATH]; /* Toast 左侧小图，空串=不显示 */
 
     /* ---- 图片路径(空串表示不显示) ---- */
     wchar_t  start_image[MAX_PATH];
@@ -95,6 +103,12 @@ bool config_save(const AppConfig* c, HMODULE mod);
 
 /* 立即把 g_config 中的控制台设置应用到当前控制台窗口（标题/颜色/显隐） */
 void config_apply_console(void);
+
+/* 控制台编码：UTF-8 代码页 + CJK 字体，避免中文变 ??? */
+void con_init(void);
+
+/* 控制台宽字符输出（WriteConsoleW，不依赖 locale，中文可正确显示） */
+void con_printf(const wchar_t* fmt, ...);
 
 /* 颜色 <-> "RRGGBB" 字符串 */
 void color_to_hex(COLORREF color, wchar_t* out, size_t out_len);

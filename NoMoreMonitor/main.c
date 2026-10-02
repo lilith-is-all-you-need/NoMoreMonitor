@@ -8,6 +8,7 @@
 #include "resource.h"
 #include "config.h"
 #include "osd_render.h"
+#include "toast_sound.h"
 #include <tchar.h>
 #include <shlobj.h>
 
@@ -38,7 +39,7 @@ void SetupLogWindow() {
     HWND hwndConsole = GetConsoleWindow();
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hwndConsole == NULL || hOut == INVALID_HANDLE_VALUE) {
-        printf("[!]can't get the console handle\n");
+        con_printf(L"[!]can't get the console handle\n");
         return;
     }
 
@@ -82,6 +83,7 @@ BOOL WINAPI console_ctrl_handler(DWORD signal) {
     case CTRL_LOGOFF_EVENT:
     case CTRL_SHUTDOWN_EVENT:
         notice_cleanup_tray();
+        toast_sound_stop();
         messager_uninit();
         osd_shutdown();
         return TRUE;
@@ -130,6 +132,7 @@ static bool process_is_elevated(void) {
 
 int main() {
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+    con_init();
     config_load(&g_config, NULL);
     {
         /* 首次运行生成一份默认配置文件，方便用户手动编辑 */
@@ -146,27 +149,31 @@ int main() {
     }
 
     /* 诊断：确认当前进程是否真的以管理员（提权）运行 */
-    wprintf(L"[*]Process elevated (admin): %s\n", process_is_elevated() ? L"YES" : L"NO");
+    con_printf(L"[*]Process elevated (admin): %s\n", process_is_elevated() ? L"YES" : L"NO");
 
     int choice = MessageBoxW(NULL, L"是否以巨幅文本+通知的形式来提示（若选否则只以通知形式）", L"Lilith is all you need", MB_YESNO | MB_ICONQUESTION);
     if (choice == IDYES) {
         g_use_osd = true;
-        wprintf(L"[-]%s\n", g_config.console_mode_on);
+        con_printf(L"[-]%s\n", g_config.console_mode_on);
     }
     else {
         g_use_osd = false;
-        wprintf(L"[-]%s\n", g_config.console_mode_off);
+        con_printf(L"[-]%s\n", g_config.console_mode_off);
     }
-    if (!messager_init()) { wprintf(L"[!]messager init failed\n"); goto MAIN_FAILED; }
-    if (!notice_window_init()) { wprintf(L"[!]notice init failed\n"); messager_uninit(); goto MAIN_FAILED; }
+    if (!messager_init()) { con_printf(L"[!]messager init failed\n"); goto MAIN_FAILED; }
+    if (!notice_window_init()) { con_printf(L"[!]notice init failed\n"); messager_uninit(); goto MAIN_FAILED; }
+    /* 模式选定后立刻弹一次桌面 Toast，两种模式都要能看见 */
+    send_balloon_notification(
+        g_config.tray_tip,
+        g_use_osd ? L"巨幅文本 + 通知模式已就绪" : L"仅通知模式已就绪");
     while (1) {
-        wprintf(L"[-]%s\n", g_config.console_waiting);
+        con_printf(L"[-]%s\n", g_config.console_waiting);
         DWORD pid = 0;
         while ((pid = FindProcessByEnum(L"media_capture.exe")) == 0) {
             MSG msg;
             while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
                 if (msg.message == WM_QUIT) {
-                    wprintf(L"[!]Window closed before target process started.\n");
+                    con_printf(L"[!]Window closed before target process started.\n");
                     goto EXIT_CLEANUP;
                 }
                 TranslateMessage(&msg);
@@ -175,17 +182,17 @@ int main() {
             Sleep(50);
         }
 
-        wprintf(L"[*]%s\n", g_config.console_target_appeared);
+        con_printf(L"[*]%s\n", g_config.console_target_appeared);
         HANDLE target_process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         if (!target_process) {
             /* 目标可能刚退出（竞态），重试而不是退出整个监控 */
-            wprintf(L"[!]OpenProcess failed (%lu), retrying...\n", GetLastError());
+            con_printf(L"[!]OpenProcess failed (%lu), retrying...\n", GetLastError());
             continue;
         }
         WaitForInputIdle(target_process, 5000);
         wchar_t full_path[MAX_PATH] = { 0 };
         if (GetModuleFileNameW(NULL, full_path, MAX_PATH) == 0) {
-            wprintf(L"[!]GetModuleFileNameW failed: %lu\n", GetLastError());
+            con_printf(L"[!]GetModuleFileNameW failed: %lu\n", GetLastError());
             CloseHandle(target_process);
             goto MAIN_FAILED;
         }
@@ -196,30 +203,30 @@ int main() {
             wcscpy_s(last_slash + 1, remaining_space, L"NoMoreMonitor_Dll.dll");
         }
         else {
-            wprintf(L"[!]Invalid execution path\n");
+            con_printf(L"[!]Invalid execution path\n");
             CloseHandle(target_process);
             goto MAIN_FAILED;
         }
 
         int eject_retries = 10;
         while (ejector(target_process, L"NoMoreMonitor_Dll.dll") && eject_retries-- > 0) {
-            wprintf(L"[*]Found existing DLL in target process, ejecting...\n");
+            con_printf(L"[*]Found existing DLL in target process, ejecting...\n");
             Sleep(100);
         }
 
         if (!injector(target_process, full_path)) {
-            wprintf(L"[!] inject failed\n");
+            con_printf(L"[!] inject failed\n");
             CloseHandle(target_process);
             continue;
         }
 
-        wprintf(L"[-]%s\n", g_config.console_running);
+        con_printf(L"[-]%s\n", g_config.console_running);
         bool process_alive = true;
         while (process_alive) {
             DWORD wait_res = MsgWaitForMultipleObjects(1, &target_process, FALSE, INFINITE, QS_ALLINPUT);
 
             if (wait_res == WAIT_OBJECT_0) {
-                wprintf(L"[*]%s\n", g_config.console_target_closed);
+                con_printf(L"[*]%s\n", g_config.console_target_closed);
                 PostMessage(hwnd, WM_IPC_STATE, status_waiting, 0);
                 process_alive = false;
             }
@@ -240,13 +247,15 @@ int main() {
     }
 
 EXIT_CLEANUP:
-    wprintf(L"[*]%s\n", g_config.console_mission_completed);
+    con_printf(L"[*]%s\n", g_config.console_mission_completed);
+    toast_sound_stop();
     messager_uninit();
     osd_shutdown();
     system("pause");
     return 0;
 
 MAIN_FAILED:
+    toast_sound_stop();
     messager_uninit();
     osd_shutdown();
     system("pause");

@@ -47,34 +47,13 @@ void osd_shutdown(void) {
 }
 
 /*
- * 按九宫格位置绘制文字。
+ * 九宫格定位：把尺寸 bw×bh 放到 w×h 画布的 pos 位置，并应用像素微调。
  * pos: 0左上 1上 2右上 3左 4中 5右 6左下 7下 8右下
  * ox/oy: 像素微调；vshift: 额外向下偏移（日志行用）
  */
-static void draw_text_at(Graphics* g, const wchar_t* text, int w, int h,
-                         COLORREF color, int alpha, bool big,
-                         int pos, int ox, int oy, int vshift) {
-    if (!text || text[0] == L'\0') return;
-    if (alpha <= 0) return;
-
-    FontFamily ff(L"Microsoft YaHei");
-    REAL size = big ? 120.0f : 40.0f;
-    Font font(&ff, size, FontStyleBold, UnitPixel);
-    SolidBrush brush(Color((BYTE)alpha, GetRValue(color), GetGValue(color), GetBValue(color)));
-
-    StringFormat fmt;
-    fmt.SetAlignment(StringAlignmentNear);
-    fmt.SetLineAlignment(StringAlignmentNear);
-    fmt.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsNoClip);
-
-    RectF layout(0.0f, 0.0f, (REAL)w, (REAL)h);
-    RectF bounds;
-    g->MeasureString(text, -1, &font, layout, &fmt, &bounds);
-    REAL bw = bounds.Width;
-    REAL bh = bounds.Height;
-    if (bw <= 0.0f) bw = 1.0f;
-    if (bh <= 0.0f) bh = 1.0f;
-
+static void grid_place(int w, int h, REAL bw, REAL bh,
+                       int pos, int ox, int oy, REAL vshift,
+                       REAL* out_x, REAL* out_y) {
     if (pos < 0 || pos > 8) pos = 4;
     int hpos = pos % 3;   /* 0左 1中 2右 */
     int vpos = pos / 3;   /* 0上 1中 2下 */
@@ -88,19 +67,81 @@ static void draw_text_at(Graphics* g, const wchar_t* text, int w, int h,
     else if (vpos == 1) y = ((REAL)h - bh) / 2.0f + (REAL)oy;
     else                y = (REAL)h - bh + (REAL)oy;
 
-    y += (REAL)vshift;
+    y += vshift;
 
     /* 收敛到可视区域 */
     if (x < 0.0f) x = 0.0f;
     if (y < 0.0f) y = 0.0f;
     if (x + bw > (REAL)w) x = (REAL)w - bw;
     if (y + bh > (REAL)h) y = (REAL)h - bh;
+    if (x < 0.0f) x = 0.0f;
+    if (y < 0.0f) y = 0.0f;
 
-    RectF dest(x, y, bw, bh);
-    g->DrawString(text, -1, &font, dest, &fmt, &brush);
+    *out_x = x;
+    *out_y = y;
 }
 
-static bool draw_image_fit(Graphics* g, const wchar_t* path, int w, int h, int scale_percent, int alpha) {
+static void draw_text_at(Graphics* g, const wchar_t* text, int w, int h,
+                         COLORREF color, int alpha, bool big,
+                         int pos, int ox, int oy, int vshift,
+                         int font_size, int letter_spacing) {
+    if (!text || text[0] == L'\0') return;
+    if (alpha <= 0) return;
+
+    REAL size;
+    if (big) {
+        size = (font_size >= 16 && font_size <= 240) ? (REAL)font_size : 120.0f;
+    }
+    else {
+        /* 日志行按主字号比例缩小，保持相对层次 */
+        int log_size = font_size >= 16 ? (int)(font_size / 3) : 40;
+        if (log_size < 16) log_size = 16;
+        if (log_size > 72) log_size = 72;
+        size = (REAL)log_size;
+    }
+    if (letter_spacing < -20) letter_spacing = -20;
+    if (letter_spacing > 80) letter_spacing = 80;
+    REAL spacing = (REAL)letter_spacing;
+
+    FontFamily ff(L"Microsoft YaHei");
+    Font font(&ff, size, FontStyleBold, UnitPixel);
+    SolidBrush brush(Color((BYTE)alpha, GetRValue(color), GetGValue(color), GetBValue(color)));
+
+    StringFormat fmt;
+    fmt.SetAlignment(StringAlignmentNear);
+    fmt.SetLineAlignment(StringAlignmentNear);
+    fmt.SetFormatFlags(StringFormatFlagsNoWrap | StringFormatFlagsNoClip);
+
+    RectF layout(0.0f, 0.0f, (REAL)w, (REAL)h);
+    RectF bounds;
+    g->MeasureString(text, -1, &font, layout, &fmt, &bounds);
+    REAL bw = bounds.Width + spacing * (REAL)(wcslen(text) > 0 ? wcslen(text) - 1 : 0);
+    REAL bh = bounds.Height;
+    if (bw <= 0.0f) bw = 1.0f;
+    if (bh <= 0.0f) bh = 1.0f;
+
+    REAL x, y;
+    grid_place(w, h, bw, bh, pos, ox, oy, (REAL)vshift, &x, &y);
+
+    if (spacing == 0.0f) {
+        RectF dest(x, y, bw, bh);
+        g->DrawString(text, -1, &font, dest, &fmt, &brush);
+        return;
+    }
+
+    /* 有字距时逐字绘制 */
+    REAL cx = x;
+    for (const wchar_t* p = text; *p; ++p) {
+        wchar_t ch[2] = { *p, L'\0' };
+        g->DrawString(ch, 1, &font, PointF(cx, y), &brush);
+        RectF cb;
+        g->MeasureString(ch, 1, &font, layout, &fmt, &cb);
+        cx += cb.Width + spacing;
+    }
+}
+
+static bool draw_image_fit(Graphics* g, const wchar_t* path, int w, int h, int scale_percent, int alpha,
+                           int pos, int ox, int oy) {
     if (!path || path[0] == L'\0') return false;
     if (scale_percent < 10) scale_percent = 10;
     if (scale_percent > 400) scale_percent = 400;
@@ -146,8 +187,11 @@ static bool draw_image_fit(Graphics* g, const wchar_t* path, int w, int h, int s
         g_img_cache_scale = scale_percent;
     }
 
-    int dx = (w - g_img_cache_w) / 2;
-    int dy = (h - g_img_cache_h) / 2;
+    /* 与文字共用九宫格 + 像素微调，叠盖时图和字落在同一位置 */
+    REAL fx, fy;
+    grid_place(w, h, (REAL)g_img_cache_w, (REAL)g_img_cache_h, pos, ox, oy, 0.0f, &fx, &fy);
+    int dx = (int)(fx + 0.5f);
+    int dy = (int)(fy + 0.5f);
 
     /* 已经缩放到目标尺寸，1:1 绘制，不再二次插值；按 alpha 整体淡入淡出 */
     Bitmap bmp(g_img_cache_w, g_img_cache_h, g_img_cache_w * 4, PixelFormat32bppPARGB, g_img_cache_bgra);
@@ -216,18 +260,21 @@ void osd_render(HWND hwnd, int state, const AppConfig* cfg, const wchar_t* log_t
 
     bool has_image = false;
     if (cfg->show_image && alpha > 0) {
-        has_image = draw_image_fit(&g, image_path, w, h, cfg->image_scale, alpha);
+        has_image = draw_image_fit(&g, image_path, w, h, cfg->image_scale, alpha,
+                                   cfg->text_position, cfg->text_offset_x, cfg->text_offset_y);
     }
 
     bool draw_text = !(has_image && cfg->image_replace);
     if (draw_text && state_text && state_text[0] != L'\0' && state != status_waiting) {
         draw_text_at(&g, state_text, w, h, state_color, alpha, true,
-                     cfg->text_position, cfg->text_offset_x, cfg->text_offset_y, 0);
+                     cfg->text_position, cfg->text_offset_x, cfg->text_offset_y, 0,
+                     cfg->text_font_size, cfg->letter_spacing);
     }
 
     if (log_text && log_text[0] != L'\0') {
         draw_text_at(&g, log_text, w, h, cfg->log_color, 255, false,
-                     cfg->text_position, cfg->text_offset_x, cfg->text_offset_y, 250);
+                     cfg->text_position, cfg->text_offset_x, cfg->text_offset_y, 250,
+                     cfg->text_font_size, cfg->letter_spacing);
     }
 
     /* 通过 UpdateLayeredWindow 呈现(逐像素 alpha) */

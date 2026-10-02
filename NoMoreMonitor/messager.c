@@ -62,7 +62,7 @@ DWORD WINAPI lililth_thread_proc(LPVOID lpParameter) {
 
         switch (curr_pack.curr_state) {
         case status_error:
-            wprintf(L"[!]Log from Dll:%s Err code:%d\n",
+            con_printf(L"[!]Log from Dll:%s Err code:%d\n",
                 curr_pack.log_buffer, curr_pack.pot_error);
             break;
         case status_waiting:
@@ -74,23 +74,23 @@ DWORD WINAPI lililth_thread_proc(LPVOID lpParameter) {
             if (hwnd) PostMessage(hwnd, WM_IPC_STATE, status_watching, 0);
             break;
         case status_start:
-            wprintf(L"[-]%s\n", g_config.console_spy_start);
+            con_printf(L"[-]%s\n", g_config.console_spy_start);
             if (hwnd) PostMessage(hwnd, WM_IPC_STATE, status_start, 0);
             break;
         case status_stop:
-            wprintf(L"[-]%s\n", g_config.console_spy_stop);
+            con_printf(L"[-]%s\n", g_config.console_spy_stop);
             spy_session_stop();
             if (hwnd) PostMessage(hwnd, WM_IPC_STATE, status_stop, 0);
             break;
         case status_log:
-            wprintf(L"[*]Log:%s\n", curr_pack.log_buffer);
+            con_printf(L"[*]Log:%s\n", curr_pack.log_buffer);
 
             if (hwnd) {
                 SendMessage(hwnd, WM_IPC_STATE, status_log, (LPARAM)curr_pack.log_buffer);
             }
             break;
         case status_info:
-            wprintf(L"[*]Info:%s\n", curr_pack.log_buffer);
+            con_printf(L"[*]Info:%s\n", curr_pack.log_buffer);
             break;
         default:
             break;
@@ -111,24 +111,24 @@ bool messager_init(void) {
     sa.bInheritHandle = FALSE;
 
     event = CreateEventW(NULL, FALSE, FALSE, L"Local\\LilithLogEvent");
-    if (!event) { wprintf(L"[!]can't create event (%lu)\n", GetLastError()); goto fail; }
+    if (!event) { con_printf(L"[!]can't create event (%lu)\n", GetLastError()); goto fail; }
 
     mutex = CreateMutexW(NULL, FALSE, L"Local\\LilithMutex");
-    if (!mutex) { wprintf(L"[!]can't create mutex (%lu)\n", GetLastError()); goto fail; }
+    if (!mutex) { con_printf(L"[!]can't create mutex (%lu)\n", GetLastError()); goto fail; }
 
     mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
         0, sizeof(struct log_data), L"Local\\LilithSharedMem");
-    if (!mapping) { wprintf(L"[!]can't create file mapping (%lu)\n", GetLastError()); goto fail; }
+    if (!mapping) { con_printf(L"[!]can't create file mapping (%lu)\n", GetLastError()); goto fail; }
 
     ptr_buf = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(struct log_data));
-    if (!ptr_buf) { wprintf(L"[!]can't map view (%lu)\n", GetLastError()); goto fail; }
+    if (!ptr_buf) { con_printf(L"[!]can't map view (%lu)\n", GetLastError()); goto fail; }
     ZeroMemory(ptr_buf, sizeof(struct log_data));
 
     quit_event = CreateEventW(NULL, TRUE, FALSE, NULL);
-    if (!quit_event) { wprintf(L"[!]can't create quit_event (%lu)\n", GetLastError()); goto fail; }
+    if (!quit_event) { con_printf(L"[!]can't create quit_event (%lu)\n", GetLastError()); goto fail; }
 
     msg_thread = CreateThread(NULL, 0, lililth_thread_proc, NULL, 0, NULL);
-    if (!msg_thread) { wprintf(L"[!]can't create messager thread (%lu)\n", GetLastError()); goto fail; }
+    if (!msg_thread) { con_printf(L"[!]can't create messager thread (%lu)\n", GetLastError()); goto fail; }
 
     return true;
 

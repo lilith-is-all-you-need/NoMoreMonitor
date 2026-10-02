@@ -4,6 +4,7 @@
 #include <wchar.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <locale.h>
 
 #define INI_NAME      L"NoMoreMonitor.ini"
 #define DATA_DIR_NAME L"NoMoreMonitor"
@@ -108,6 +109,8 @@ void config_defaults(AppConfig* c) {
     wcscpy_s(c->watching_text, _countof(c->watching_text), L"风好大");
     wcscpy_s(c->stop_text,     _countof(c->stop_text),     L"风停了");
     wcscpy_s(c->countdown_text,_countof(c->countdown_text),L"Delay %d s");
+    c->text_font_size = 120;
+    c->letter_spacing = 0;
 
     c->start_color    = RGB(255, 0, 0);
     c->watching_color = RGB(255, 165, 0);
@@ -121,6 +124,10 @@ void config_defaults(AppConfig* c) {
     wcscpy_s(c->stop_title,     _countof(c->stop_title),     L"风停了");
     wcscpy_s(c->stop_body,      _countof(c->stop_body),      L"We are safe... temporarily");
     wcscpy_s(c->tray_tip,       _countof(c->tray_tip),       L"Lilith Status");
+    c->toast_sound[0] = L'\0';   /* 空 = 系统默认提示音 */
+    c->toast_bg_color     = RGB(36, 36, 36);
+    c->toast_accent_color = RGB(255, 105, 180);
+    c->toast_image[0]     = L'\0';
 
     c->start_image[0] = L'\0';
     c->watching_image[0] = L'\0';
@@ -206,6 +213,16 @@ static void apply_key(AppConfig* c, const wchar_t* sec, const wchar_t* key, cons
         else if (wcscmp(key, L"watching_text") == 0) set_str_field(c->watching_text, _countof(c->watching_text), val);
         else if (wcscmp(key, L"stop_text") == 0) set_str_field(c->stop_text, _countof(c->stop_text), val);
         else if (wcscmp(key, L"countdown_text") == 0) set_str_field(c->countdown_text, _countof(c->countdown_text), val);
+        else if (wcscmp(key, L"text_font_size") == 0) {
+            c->text_font_size = _wtoi(val);
+            if (c->text_font_size < 16) c->text_font_size = 16;
+            if (c->text_font_size > 240) c->text_font_size = 240;
+        }
+        else if (wcscmp(key, L"letter_spacing") == 0) {
+            c->letter_spacing = _wtoi(val);
+            if (c->letter_spacing < -20) c->letter_spacing = -20;
+            if (c->letter_spacing > 80) c->letter_spacing = 80;
+        }
         else if (wcscmp(key, L"text_position") == 0) { c->text_position = _wtoi(val); if (c->text_position < 0 || c->text_position > 8) c->text_position = 4; }
         else if (wcscmp(key, L"text_offset_x") == 0) c->text_offset_x = _wtoi(val);
         else if (wcscmp(key, L"text_offset_y") == 0) c->text_offset_y = _wtoi(val);
@@ -224,6 +241,10 @@ static void apply_key(AppConfig* c, const wchar_t* sec, const wchar_t* key, cons
         else if (wcscmp(key, L"stop_title") == 0) set_str_field(c->stop_title, _countof(c->stop_title), val);
         else if (wcscmp(key, L"stop_body") == 0) set_str_field(c->stop_body, _countof(c->stop_body), val);
         else if (wcscmp(key, L"tray_tip") == 0) set_str_field(c->tray_tip, _countof(c->tray_tip), val);
+        else if (wcscmp(key, L"toast_sound") == 0) set_str_field(c->toast_sound, _countof(c->toast_sound), val);
+        else if (wcscmp(key, L"toast_bg_color") == 0) c->toast_bg_color = hex_to_color(val);
+        else if (wcscmp(key, L"toast_accent_color") == 0) c->toast_accent_color = hex_to_color(val);
+        else if (wcscmp(key, L"toast_image") == 0) set_str_field(c->toast_image, _countof(c->toast_image), val);
     }
     else if (wcscmp(sec, L"image") == 0) {
         if (wcscmp(key, L"start_image") == 0) set_str_field(c->start_image, _countof(c->start_image), val);
@@ -326,6 +347,8 @@ bool config_save(const AppConfig* c, HMODULE mod) {
     buf_append(buf, _countof(buf), &pos, L"watching_text=%s\r\n", c->watching_text);
     buf_append(buf, _countof(buf), &pos, L"stop_text=%s\r\n", c->stop_text);
     buf_append(buf, _countof(buf), &pos, L"countdown_text=%s\r\n", c->countdown_text);
+    buf_append(buf, _countof(buf), &pos, L"text_font_size=%d\r\n", c->text_font_size);
+    buf_append(buf, _countof(buf), &pos, L"letter_spacing=%d\r\n", c->letter_spacing);
     buf_append(buf, _countof(buf), &pos, L"text_position=%d\r\n", c->text_position);
     buf_append(buf, _countof(buf), &pos, L"text_offset_x=%d\r\n", c->text_offset_x);
     buf_append(buf, _countof(buf), &pos, L"text_offset_y=%d\r\n", c->text_offset_y);
@@ -350,6 +373,12 @@ bool config_save(const AppConfig* c, HMODULE mod) {
     buf_append(buf, _countof(buf), &pos, L"stop_title=%s\r\n", c->stop_title);
     buf_append(buf, _countof(buf), &pos, L"stop_body=%s\r\n", c->stop_body);
     buf_append(buf, _countof(buf), &pos, L"tray_tip=%s\r\n", c->tray_tip);
+    buf_append(buf, _countof(buf), &pos, L"toast_sound=%s\r\n", c->toast_sound);
+    color_to_hex(c->toast_bg_color, tmp, _countof(tmp));
+    buf_append(buf, _countof(buf), &pos, L"toast_bg_color=%s\r\n", tmp);
+    color_to_hex(c->toast_accent_color, tmp, _countof(tmp));
+    buf_append(buf, _countof(buf), &pos, L"toast_accent_color=%s\r\n", tmp);
+    buf_append(buf, _countof(buf), &pos, L"toast_image=%s\r\n", c->toast_image);
     buf_append(buf, _countof(buf), &pos, L"\r\n");
 
     buf_append(buf, _countof(buf), &pos, L"[image]\r\n");
@@ -402,4 +431,63 @@ void config_apply_console(void) {
     }
     WORD attr = (WORD)((vals[0] << 4) | vals[1]);
     SetConsoleTextAttribute(hOut, attr);
+}
+
+/* ================= 控制台中文输出 ================= */
+
+void con_init(void) {
+    /* UTF-8 代码页：与 INI 的 UTF-8 一致 */
+    SetConsoleCP(CP_UTF8);
+    SetConsoleOutputCP(CP_UTF8);
+
+    /* CRT 侧也切到 UTF-8（UCRT 支持 ".UTF8"；失败则用系统默认） */
+    if (!setlocale(LC_ALL, ".UTF8")) {
+        setlocale(LC_ALL, "");
+    }
+
+    /* 换成带 CJK 字形的等宽字体，避免 UTF-8 中文显示成方框 */
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut == NULL || hOut == INVALID_HANDLE_VALUE) return;
+
+    CONSOLE_FONT_INFOEX cfi;
+    ZeroMemory(&cfi, sizeof(cfi));
+    cfi.cbSize = sizeof(cfi);
+    if (!GetCurrentConsoleFontEx(hOut, FALSE, &cfi)) return;
+
+    static const wchar_t* fonts[] = {
+        L"新宋体", L"NSimSun", L"微软雅黑",
+        L"Microsoft YaHei", L"Consolas",
+    };
+    for (int i = 0; i < 5; i++) {
+        wcscpy_s(cfi.FaceName, _countof(cfi.FaceName), fonts[i]);
+        if (SetCurrentConsoleFontEx(hOut, FALSE, &cfi)) break;
+    }
+}
+
+void con_printf(const wchar_t* fmt, ...) {
+    if (!fmt) return;
+
+    wchar_t buf[2048];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnwprintf_s(buf, _countof(buf), _TRUNCATE, fmt, ap);
+    va_end(ap);
+
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h == NULL || h == INVALID_HANDLE_VALUE) return;
+
+    DWORD written = 0;
+    DWORD len = (DWORD)wcslen(buf);
+    if (WriteConsoleW(h, buf, len, &written, NULL)) {
+        return;
+    }
+
+    /* 输出被重定向到文件/管道时 WriteConsoleW 会失败，改写 UTF-8 */
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, buf, (int)len, NULL, 0, NULL, NULL);
+    if (bytes <= 0) return;
+    char* utf8 = (char*)malloc((size_t)bytes + 1);
+    if (!utf8) return;
+    WideCharToMultiByte(CP_UTF8, 0, buf, (int)len, utf8, bytes, NULL, NULL);
+    WriteFile(h, utf8, (DWORD)bytes, &written, NULL);
+    free(utf8);
 }

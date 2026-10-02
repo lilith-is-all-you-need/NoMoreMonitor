@@ -57,6 +57,9 @@
     <ClCompile Include="injector.c">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="toast_sound.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="analysis.h">
@@ -75,6 +78,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="notice.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="toast_sound.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="osd_render.h">

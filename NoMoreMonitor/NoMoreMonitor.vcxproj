@@ -162,6 +162,7 @@
     <ClCompile Include="spy_data.c" />
     <ClCompile Include="stbi_imp.c" />
     <ClCompile Include="stbir_imp.c" />
+    <ClCompile Include="toast_sound.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="analysis.h" />
@@ -178,6 +179,7 @@
     <ClInclude Include="spy_data.h" />
     <ClInclude Include="stb_image.h" />
     <ClInclude Include="stb_image_resize2.h" />
+    <ClInclude Include="toast_sound.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="NoMoreMonitor.rc" />

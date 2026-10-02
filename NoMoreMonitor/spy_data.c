@@ -71,7 +71,7 @@ static bool spy_data_ensure_dir(void) {
         return true;
     }
 
-    wprintf(L"[!]spy data dir create FAILED: %s (SHCreateDirectoryEx=%d, GetLastError=%lu)\n",
+    con_printf(L"[!]spy data dir create FAILED: %s (SHCreateDirectoryEx=%d, GetLastError=%lu)\n",
             g_config.data_dir, r, GetLastError());
     return false;
 }
@@ -123,12 +123,12 @@ bool spy_data_append(const SpySession* s) {
         if (spy_data_ensure_dir()) {
             ok = spy_write_line(path, line);
             if (!ok) {
-                wprintf(L"[!]spy data write to custom dir FAILED (%s, err=%lu), falling back to default dir\n",
+                con_printf(L"[!]spy data write to custom dir FAILED (%s, err=%lu), falling back to default dir\n",
                         g_config.data_dir, GetLastError());
             }
         }
         else {
-            wprintf(L"[!]custom spy dir unusable (%s), falling back to default dir\n", g_config.data_dir);
+            con_printf(L"[!]custom spy dir unusable (%s), falling back to default dir\n", g_config.data_dir);
         }
     }
 
@@ -139,7 +139,7 @@ bool spy_data_append(const SpySession* s) {
         spy_data_default_path(def_path, _countof(def_path));
         ok = spy_write_line(def_path, line);
         if (!ok) {
-            wprintf(L"[!]spy data write to default dir FAILED (%s, err=%lu)\n", def_path, GetLastError());
+            con_printf(L"[!]spy data write to default dir FAILED (%s, err=%lu)\n", def_path, GetLastError());
         }
     }
 

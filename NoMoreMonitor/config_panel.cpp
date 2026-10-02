@@ -1,6 +1,8 @@
 #include "config_panel.h"
 #include "img_loader.h"
 #include "preview_window.h"
+#include "toast_sound.h"
+#include "notice.h"
 #include <commdlg.h>
 #include <commctrl.h>
 #include <windowsx.h>
@@ -30,11 +32,17 @@ enum {
     IDC_WATCHING_TEXT,
     IDC_STOP_TEXT,
     IDC_COUNTDOWN_TEXT,
+    IDC_FONT_SIZE,
+    IDC_FONT_SIZE_LBL,
+    IDC_LETTER_SPACING,
+    IDC_LETTER_SPACING_LBL,
 
     IDC_COLOR_START,
     IDC_COLOR_WATCHING,
     IDC_COLOR_STOP,
     IDC_COLOR_LOG,
+    IDC_COLOR_TOAST_BG,
+    IDC_COLOR_TOAST_ACCENT,
 
     IDC_START_TITLE,
     IDC_START_BODY,
@@ -43,6 +51,12 @@ enum {
     IDC_STOP_TITLE,
     IDC_STOP_BODY,
     IDC_TRAY_TIP,
+    IDC_TOAST_SOUND,
+    IDC_TOAST_SOUND_BROWSE,
+    IDC_BTN_SOUND_PREVIEW,
+    IDC_BTN_SOUND_STOP,
+    IDC_TOAST_IMAGE,
+    IDC_TOAST_IMAGE_BROWSE,
 
     IDC_START_IMAGE,
     IDC_START_IMAGE_BROWSE,
@@ -98,9 +112,9 @@ struct PanelData {
     int previewState;       /* 0 开始 1 监视中 2 结束 */
     bool advanced;          /* 专业模式 */
     wchar_t previewPath[MAX_PATH];
-    HBRUSH swatchBrush[4];
-    COLORREF swatchColor[4];
-    bool swatchColorSet[4];
+    HBRUSH swatchBrush[6];
+    COLORREF swatchColor[6];
+    bool swatchColorSet[6];
     HFONT hFont;
     bool hFontCreated;
 };
@@ -169,6 +183,8 @@ static COLORREF get_color_by_id(const PanelData* pd, int id) {
     case IDC_COLOR_WATCHING: return pd->work.watching_color;
     case IDC_COLOR_STOP:     return pd->work.stop_color;
     case IDC_COLOR_LOG:      return pd->work.log_color;
+    case IDC_COLOR_TOAST_BG: return pd->work.toast_bg_color;
+    case IDC_COLOR_TOAST_ACCENT: return pd->work.toast_accent_color;
     }
     return RGB(255, 255, 255);
 }
@@ -179,6 +195,8 @@ static void set_color_by_id(PanelData* pd, int id, COLORREF c) {
     case IDC_COLOR_WATCHING: pd->work.watching_color = c; break;
     case IDC_COLOR_STOP:     pd->work.stop_color = c; break;
     case IDC_COLOR_LOG:      pd->work.log_color = c; break;
+    case IDC_COLOR_TOAST_BG: pd->work.toast_bg_color = c; break;
+    case IDC_COLOR_TOAST_ACCENT: pd->work.toast_accent_color = c; break;
     }
 }
 
@@ -188,6 +206,8 @@ static int swatch_index(int id) {
     case IDC_COLOR_WATCHING: return 1;
     case IDC_COLOR_STOP:     return 2;
     case IDC_COLOR_LOG:      return 3;
+    case IDC_COLOR_TOAST_BG: return 4;
+    case IDC_COLOR_TOAST_ACCENT: return 5;
     }
     return -1;
 }
@@ -299,6 +319,20 @@ static void write_controls(PanelData* pd) {
     SetDlgItemTextW(c, IDC_WATCHING_TEXT, pd->work.watching_text);
     SetDlgItemTextW(c, IDC_STOP_TEXT, pd->work.stop_text);
 
+    /* 字号 / 字距滑块 */
+    SendDlgItemMessageW(c, IDC_FONT_SIZE, TBM_SETPOS, TRUE, pd->work.text_font_size);
+    {
+        wchar_t buf[32];
+        swprintf_s(buf, L"%d px", pd->work.text_font_size);
+        SetDlgItemTextW(c, IDC_FONT_SIZE_LBL, buf);
+    }
+    SendDlgItemMessageW(c, IDC_LETTER_SPACING, TBM_SETPOS, TRUE, pd->work.letter_spacing + 20);
+    {
+        wchar_t buf[32];
+        swprintf_s(buf, L"%d px", pd->work.letter_spacing);
+        SetDlgItemTextW(c, IDC_LETTER_SPACING_LBL, buf);
+    }
+
     SendDlgItemMessageW(c, IDC_CHK_ADVANCED, BM_SETCHECK, pd->advanced ? BST_CHECKED : BST_UNCHECKED, 0);
 
     if (pd->advanced) {
@@ -323,6 +357,8 @@ static void write_controls(PanelData* pd) {
         SetDlgItemTextW(c, IDC_STOP_TITLE, pd->work.stop_title);
         SetDlgItemTextW(c, IDC_STOP_BODY, pd->work.stop_body);
         SetDlgItemTextW(c, IDC_TRAY_TIP, pd->work.tray_tip);
+        SetDlgItemTextW(c, IDC_TOAST_SOUND, pd->work.toast_sound);
+        SetDlgItemTextW(c, IDC_TOAST_IMAGE, pd->work.toast_image);
 
         SetDlgItemTextW(c, IDC_START_IMAGE, pd->work.start_image);
         SetDlgItemTextW(c, IDC_WATCHING_IMAGE, pd->work.watching_image);
@@ -359,6 +395,13 @@ static void read_controls(PanelData* pd) {
     GetDlgItemTextW(c, IDC_WATCHING_TEXT, pd->work.watching_text, _countof(pd->work.watching_text));
     GetDlgItemTextW(c, IDC_STOP_TEXT, pd->work.stop_text, _countof(pd->work.stop_text));
 
+    pd->work.text_font_size = (int)SendDlgItemMessageW(c, IDC_FONT_SIZE, TBM_GETPOS, 0, 0);
+    if (pd->work.text_font_size < 16) pd->work.text_font_size = 16;
+    if (pd->work.text_font_size > 240) pd->work.text_font_size = 240;
+    pd->work.letter_spacing = (int)SendDlgItemMessageW(c, IDC_LETTER_SPACING, TBM_GETPOS, 0, 0) - 20;
+    if (pd->work.letter_spacing < -20) pd->work.letter_spacing = -20;
+    if (pd->work.letter_spacing > 80) pd->work.letter_spacing = 80;
+
     if (pd->advanced) {
         GetDlgItemTextW(c, IDC_COUNTDOWN_TEXT, pd->work.countdown_text, _countof(pd->work.countdown_text));
 
@@ -377,6 +420,8 @@ static void read_controls(PanelData* pd) {
         GetDlgItemTextW(c, IDC_STOP_TITLE, pd->work.stop_title, _countof(pd->work.stop_title));
         GetDlgItemTextW(c, IDC_STOP_BODY, pd->work.stop_body, _countof(pd->work.stop_body));
         GetDlgItemTextW(c, IDC_TRAY_TIP, pd->work.tray_tip, _countof(pd->work.tray_tip));
+        GetDlgItemTextW(c, IDC_TOAST_SOUND, pd->work.toast_sound, _countof(pd->work.toast_sound));
+        GetDlgItemTextW(c, IDC_TOAST_IMAGE, pd->work.toast_image, _countof(pd->work.toast_image));
 
         GetDlgItemTextW(c, IDC_START_IMAGE, pd->work.start_image, _countof(pd->work.start_image));
         GetDlgItemTextW(c, IDC_WATCHING_IMAGE, pd->work.watching_image, _countof(pd->work.watching_image));
@@ -409,6 +454,31 @@ static void browse_image(HWND hwnd, PanelData* pd, int editId) {
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&ofn)) {
         SetDlgItemTextW(pd->hContent, editId, path);
+    }
+}
+
+static void browse_audio(HWND hwnd, PanelData* pd) {
+    wchar_t path[MAX_PATH] = { 0 };
+    OPENFILENAMEW ofn = { 0 };
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = L"音频文件\0*.wav;*.mp3;*.flac;*.ogg;*.m4a;*.aac;*.wma\0所有文件\0*.*\0\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameW(&ofn)) {
+        SetDlgItemTextW(pd->hContent, IDC_TOAST_SOUND, path);
+    }
+}
+
+static void preview_toast_sound(HWND hwnd, PanelData* pd) {
+    wchar_t path[MAX_PATH] = { 0 };
+    GetDlgItemTextW(pd->hContent, IDC_TOAST_SOUND, path, MAX_PATH);
+    if (!toast_sound_play(path)) {
+        MessageBoxW(hwnd,
+                    L"无法播放该音频。\n\n请确认文件存在且格式受支持（wav / mp3 / flac 等）。\n"
+                    L"留空则使用系统默认提示音。",
+                    L"试听提示音", MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
     }
 }
 
@@ -457,7 +527,7 @@ static void browse_data_dir(HWND hwnd, PanelData* pd) {
                                         L"处理：把 NoMoreMonitor.exe 加入火绒「信任区」，"
                                         L"或暂时关闭「增强勒索病毒防护」后重试。",
                                    probe_err, path);
-                        MessageBoxW(hwnd, msg, L"NoMoreMonitor", MB_OK | MB_ICONWARNING);
+                        MessageBoxW(hwnd, msg, L"NoMoreMonitor", MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
                     }
                     CoTaskMemFree(path);
                 }
@@ -516,7 +586,7 @@ static int add_path_row(PanelData* pd, const wchar_t* label, int editId, int btn
 
 static void build_content(PanelData* pd) {
     if (pd->hContent) { DestroyWindow(pd->hContent); pd->hContent = NULL; pd->hPreview = NULL; }
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 6; i++) {
         if (pd->swatchBrush[i]) { DeleteObject(pd->swatchBrush[i]); pd->swatchBrush[i] = NULL; }
         pd->swatchColorSet[i] = false;
         pd->swatchColor[i] = RGB(0, 0, 0);
@@ -543,6 +613,29 @@ static void build_content(PanelData* pd) {
     y = add_edit_row(pd, L"开始文字", IDC_START_TEXT, pd->work.start_text, y, 0);
     y = add_edit_row(pd, L"监视中文字", IDC_WATCHING_TEXT, pd->work.watching_text, y, 0);
     y = add_edit_row(pd, L"结束文字", IDC_STOP_TEXT, pd->work.stop_text, y, 0);
+    {
+        make_label(pd->hContent, L"字号", LX, y, pd->hFont);
+        HWND fs = make_ctl(pd->hContent, TRACKBAR_CLASSW, L"",
+                           WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
+                           LX + LABEL_W, y, 220, 28, IDC_FONT_SIZE, pd->hFont);
+        SendMessageW(fs, TBM_SETRANGE, TRUE, MAKELPARAM(16, 240));
+        SendMessageW(fs, TBM_SETTICFREQ, 32, 0);
+        SendMessageW(fs, TBM_SETPOS, TRUE, pd->work.text_font_size);
+        make_ctl(pd->hContent, L"STATIC", L"", 0, LX + LABEL_W + 232, y + 4, 80, 20, IDC_FONT_SIZE_LBL, pd->hFont);
+        y += ROW_H + GAP;
+    }
+    {
+        make_label(pd->hContent, L"字间距", LX, y, pd->hFont);
+        /* 滑块 0..100 映射到 -20..80 */
+        HWND ls = make_ctl(pd->hContent, TRACKBAR_CLASSW, L"",
+                           WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS,
+                           LX + LABEL_W, y, 220, 28, IDC_LETTER_SPACING, pd->hFont);
+        SendMessageW(ls, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
+        SendMessageW(ls, TBM_SETTICFREQ, 10, 0);
+        SendMessageW(ls, TBM_SETPOS, TRUE, pd->work.letter_spacing + 20);
+        make_ctl(pd->hContent, L"STATIC", L"", 0, LX + LABEL_W + 232, y + 4, 80, 20, IDC_LETTER_SPACING_LBL, pd->hFont);
+        y += ROW_H + GAP;
+    }
     y += 4;
 
     /* OSD 颜色 */
@@ -620,6 +713,29 @@ static void build_content(PanelData* pd) {
         y = add_edit_row(pd, L"结束标题", IDC_STOP_TITLE, pd->work.stop_title, y, 0);
         y = add_edit_row(pd, L"结束正文", IDC_STOP_BODY, pd->work.stop_body, y, 0);
         y = add_edit_row(pd, L"托盘提示", IDC_TRAY_TIP, pd->work.tray_tip, y, 0);
+        /* Toast 外观 */
+        {
+            make_label(pd->hContent, L"Toast 背景色", LX, y, pd->hFont);
+            make_swatch(pd->hContent, IDC_COLOR_TOAST_BG, LX + LABEL_W, y, pd->hFont);
+            make_label(pd->hContent, L"竖线颜色", LX + LABEL_W + 80, y, pd->hFont);
+            make_swatch(pd->hContent, IDC_COLOR_TOAST_ACCENT, LX + LABEL_W + 160, y, pd->hFont);
+            y += ROW_H + GAP;
+        }
+        y = add_path_row(pd, L"Toast 图片", IDC_TOAST_IMAGE, IDC_TOAST_IMAGE_BROWSE, pd->work.toast_image, y);
+        make_hint(pd->hContent, L"Toast 图片显示在弹窗左侧（约 80×80），留空则不显示", LX, y, pd->hFont);
+        y += 26;
+        /* 提示音 */
+        {
+            make_label(pd->hContent, L"提示音", LX, y, pd->hFont);
+            make_edit(pd->hContent, IDC_TOAST_SOUND, pd->work.toast_sound, LX + LABEL_W, y, pd->hFont, 0);
+            make_button(pd->hContent, IDC_TOAST_SOUND_BROWSE, L"浏览...", LX + LABEL_W + EDIT_W + 8, y, 72, pd->hFont);
+            y += ROW_H + GAP;
+            make_button(pd->hContent, IDC_BTN_SOUND_PREVIEW, L"试听", LX + LABEL_W, y, 72, pd->hFont);
+            make_button(pd->hContent, IDC_BTN_SOUND_STOP, L"停止试听", LX + LABEL_W + 80, y, 88, pd->hFont);
+            make_ctl(pd->hContent, L"STATIC", L"留空 = 系统默认提示音；支持 wav / mp3 / flac 等常见格式",
+                     0, LX + LABEL_W + 180, y + 4, 420, 22, -1, pd->hFont);
+            y += 32;
+        }
         y += 4;
 
         /* 数据目录 */
@@ -780,6 +896,10 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             case IDC_WATCHING_IMAGE_BROWSE: if (pd) { browse_image(hwnd, pd, IDC_WATCHING_IMAGE); pd->previewState = 1; refresh_preview(pd); } return 0;
             case IDC_STOP_IMAGE_BROWSE: if (pd) { browse_image(hwnd, pd, IDC_STOP_IMAGE); pd->previewState = 2; refresh_preview(pd); } return 0;
             case IDC_DATA_DIR_BROWSE: if (pd) { browse_data_dir(hwnd, pd); } return 0;
+            case IDC_TOAST_SOUND_BROWSE: if (pd) { browse_audio(hwnd, pd); } return 0;
+            case IDC_BTN_SOUND_PREVIEW: if (pd) { preview_toast_sound(hwnd, pd); } return 0;
+            case IDC_BTN_SOUND_STOP: toast_sound_stop(); return 0;
+            case IDC_TOAST_IMAGE_BROWSE: if (pd) { browse_image(hwnd, pd, IDC_TOAST_IMAGE); } return 0;
 
             case IDC_BTN_PREVIEW:
                 if (pd) {
@@ -789,11 +909,11 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     GetDlgItemTextW(pd->hContent, editId, path, MAX_PATH);
                     if (path[0]) {
                         if (!show_image_preview(path, pd->work.image_scale)) {
-                            MessageBoxW(hwnd, L"无法加载该图片文件，请确认路径与文件格式。", L"预览", MB_OK | MB_ICONWARNING);
+                            MessageBoxW(hwnd, L"无法加载该图片文件，请确认路径与文件格式。", L"预览", MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
                         }
                     }
                     else {
-                        MessageBoxW(hwnd, L"请先设置该状态的图片路径", L"预览", MB_OK | MB_ICONINFORMATION);
+                        MessageBoxW(hwnd, L"请先设置该状态的图片路径", L"预览", MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
                     }
                 }
                 return 0;
@@ -806,11 +926,18 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                         *(pd->target) = pd->work;
                         /* 控制台颜色/标题/显隐立即生效，无需重启 */
                         config_apply_console();
-                        MessageBoxW(hwnd, L"设置已保存。", L"NoMoreMonitor", MB_OK | MB_ICONINFORMATION);
+                        /* 先弹保存提示，再刷新 OSD。
+                           全屏置顶分层 OSD 会盖住普通 MessageBox，看起来像“透明空窗”。 */
+                        SetForegroundWindow(hwnd);
+                        MessageBoxW(hwnd, L"设置已保存。", L"NoMoreMonitor",
+                                    MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
+                        notice_refresh_osd();
                         DestroyWindow(hwnd);
                     }
                     else {
-                        MessageBoxW(hwnd, L"保存失败：无法写入配置文件。请确认程序目录可写。", L"NoMoreMonitor", MB_OK | MB_ICONERROR);
+                        SetForegroundWindow(hwnd);
+                        MessageBoxW(hwnd, L"保存失败：无法写入配置文件。请确认程序目录可写。", L"NoMoreMonitor",
+                                    MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
                     }
                 }
                 return 0;
@@ -831,13 +958,36 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     }
 
     case WM_HSCROLL: {
-        /* 图片显示缩放滑动条 */
-        if (pd && (HWND)lParam == GetDlgItem(pd->hContent, IDC_IMAGE_SCALE)) {
+        if (!pd) break;
+        HWND bar = (HWND)lParam;
+        if (bar == GetDlgItem(pd->hContent, IDC_IMAGE_SCALE)) {
             int pos = (int)SendDlgItemMessageW(pd->hContent, IDC_IMAGE_SCALE, TBM_GETPOS, 0, 0);
             pd->work.image_scale = pos;
             wchar_t buf[32];
             swprintf_s(buf, L"%d%%", pos);
             SetDlgItemTextW(pd->hContent, IDC_IMAGE_SCALE_LBL, buf);
+            return 0;
+        }
+        if (bar == GetDlgItem(pd->hContent, IDC_FONT_SIZE)) {
+            int pos = (int)SendDlgItemMessageW(pd->hContent, IDC_FONT_SIZE, TBM_GETPOS, 0, 0);
+            if (pos < 16) pos = 16;
+            if (pos > 240) pos = 240;
+            pd->work.text_font_size = pos;
+            wchar_t buf[32];
+            swprintf_s(buf, L"%d px", pos);
+            SetDlgItemTextW(pd->hContent, IDC_FONT_SIZE_LBL, buf);
+            notice_refresh_osd();
+            return 0;
+        }
+        if (bar == GetDlgItem(pd->hContent, IDC_LETTER_SPACING)) {
+            int pos = (int)SendDlgItemMessageW(pd->hContent, IDC_LETTER_SPACING, TBM_GETPOS, 0, 0) - 20;
+            if (pos < -20) pos = -20;
+            if (pos > 80) pos = 80;
+            pd->work.letter_spacing = pos;
+            wchar_t buf[32];
+            swprintf_s(buf, L"%d px", pos);
+            SetDlgItemTextW(pd->hContent, IDC_LETTER_SPACING_LBL, buf);
+            notice_refresh_osd();
             return 0;
         }
         break;
@@ -872,8 +1022,9 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         return 0;
 
     case WM_DESTROY: {
+        toast_sound_stop();   /* 关面板时停掉可能还在放的试听 */
         if (pd) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 6; i++) {
                 if (pd->swatchBrush[i]) DeleteObject(pd->swatchBrush[i]);
             }
             if (pd->hFontCreated && pd->hFont) DeleteObject(pd->hFont);
